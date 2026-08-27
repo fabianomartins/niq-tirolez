@@ -73,10 +73,12 @@ Escalonamento por KPI: `≥ 90% → 50%` · `≥ 95% → 70%` · `≥ 100% → 1
    aba do Qlik — o script roda igual em uma aba só, e ao reabrir o editor o Qlik
    normalmente re-divide nas 12 abas.
    *Alternativa:* colar cada `NN-*.qvs` em uma aba homônima, na ordem que `00-main` documenta.
-4. Para demo/QA sem fontes: mantenha `SET vUseMockData = 1;` em `01-variaveis.qvs` — o script
-   gera uma base sintética consistente (24 meses, ~40 distribuidores, ~9k PDVs).
-5. Para produção: `SET vUseMockData = 0;` e configure as conexões em `02-fontes.qvs`.
-6. Carregue os itens mestre: `node qlik/tools/deploy-master-items.mjs --app <APP_ID>`.
+3. **Salvar → Carregar dados.** No modo padrão (`vUseMockData = 1`) não é preciso nenhuma
+   conexão: o script gera uma base sintética consistente (18 meses, 40 distribuidores, 4k PDVs).
+4. Para produção: `SET vUseMockData = 0;` na seção `01 - Variaveis` e configure as conexões
+   em `02 - Fontes`.
+5. **Só depois da carga**, publique os itens mestre — eles referenciam campos que só existem
+   com o modelo carregado: `node qlik/tools/deploy-master-items.mjs --app <APP_ID>`.
 
 ### 2. Mashup
 
