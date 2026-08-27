@@ -36,7 +36,8 @@ Escalonamento por KPI: `≥ 90% → 50%` · `≥ 95% → 70%` · `≥ 100% → 1
 │   ├── 07-qa-checklist.md        # Checklist de QA (dado, cálculo, UI, segurança)
 │   ├── 08-criterios-aceite.md    # Critérios de aceite por tela (Gherkin)
 │   ├── 09-backlog-jira.csv       # Backlog importável no Jira
-│   └── 10-motor-insights.md      # Motor de recomendações — regras e templates
+│   ├── 10-motor-insights.md      # Motor de recomendações — regras e templates
+│   └── 11-sheets-qlik.md         # Sheets nativas: inventário de objetos e expressões
 │
 ├── qlik/
 │   ├── script/                   # Script de carga Qlik Cloud (modular, .qvs)
@@ -110,6 +111,11 @@ o motor de insights e a Matrix Hero funcionam integralmente offline.
 | 6 | Visão Executivo | Qual distribuidor da minha carteira está em risco? |
 
 Detalhamento em [`docs/04-wireframes.md`](docs/04-wireframes.md).
+
+As 6 telas existem **nas duas camadas**: como sheets nativas no app Qlik (exploração
+associativa, exportação) e como mashup Next.js (motor de insights, mobile). Ambas leem
+o mesmo modelo. Inventário de objetos, expressões e pendências manuais das sheets em
+[`docs/11-sheets-qlik.md`](docs/11-sheets-qlik.md).
 
 ---
 
