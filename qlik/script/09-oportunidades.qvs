@@ -14,11 +14,11 @@
 
 // Indice continuo de mes: idx = Ano * 12 + (Mes - 1). Aritmetica de janela sem
 // dor de cabeca com virada de ano.
-LET vIdxAtual   = Year('$(vDataHoje)') * 12 + Month('$(vDataHoje)') - 1;
-LET vIdxInicio  = $(vIdxAtual) - $(vMesesHistorico) + 1;
+LET vIdxAtual   = Num(Year(Today()) * 12 + Month(Today()) - 1, '0');
+LET vIdxInicio  = Num($(vIdxAtual) - $(vMesesHistorico) + 1, '0');
 // So faz sentido calcular oportunidade a partir do 4o mes da janela (precisa
 // de 3 meses de historico atras dele).
-LET vIdxPrimeiroAlvo = $(vIdxInicio) + $(vJanelaRecenciaMeses);
+LET vIdxPrimeiroAlvo = Num($(vIdxInicio) + $(vJanelaRecenciaMeses), '0');
 
 /* =============================================================================
    1. TABELA DE PRESENCA (PDV x mes com compra)
@@ -302,8 +302,6 @@ TRACE >> OPP_RECUPERACAO: $(vLinhasOppRec) PDVs abaixo da media historica;
 //     Penetracao, nao volume: para completar mix o que importa e o SKU que o
 //     canal mais aceita, nao o que gera mais tonelada.
 // -----------------------------------------------------------------------------
-LET vIdxRank = $(vIdxAtual) - 5;   // ultimos 6 meses
-
 TMP_RANK_BASE:
 LOAD
     RankRegiaoHero & '|' & RankCatNum & '|' & RankCanal      AS %RankGrupoCanal,
@@ -321,6 +319,7 @@ LOAD
     VolumeTon                                                AS RankVolumeTon
 RESIDENT FACT_SELL_OUT
 WHERE FlagVenda = 1
+  AND %ChaveData >= $(vDataU6MNum)
   AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
 
 TMP_RANK_CANAL:
@@ -359,6 +358,7 @@ LOAD
     %ChaveData                                               AS HistData
 RESIDENT FACT_SELL_OUT
 WHERE FlagVenda = 1
+  AND %ChaveData >= $(vDataU6MNum)
   AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
 
 TMP_HIST_CAT:

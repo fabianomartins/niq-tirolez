@@ -52,10 +52,12 @@ Escalonamento por KPI: `≥ 90% → 50%` · `≥ 95% → 70%` · `≥ 100% → 1
 │   │   ├── 09-oportunidades.qvs  # Positivação + Hero + Recuperação
 │   │   ├── 10-section-access.qvs
 │   │   ├── 99-finalize.qvs
-│   │   └── ppt-script-completo.qvs   # DERIVADO: as 12 abas em um arquivo só,
-│   │                                 # para colar de uma vez no editor de carga
+│   │   └── ppt-script-completo.qvs   # DERIVADO por tools/build-script.mjs:
+│   │                                 # as 12 abas em um arquivo, para colar de uma vez
 │   ├── master-items/             # Medidas, dimensões, variáveis, bookmarks (JSON)
-│   └── tools/deploy-master-items.mjs   # Deploy via Qlik Cloud REST/Engine API
+│   └── tools/
+│       ├── build-script.mjs      # Lint do script + geração do arquivo combinado
+│       └── deploy-master-items.mjs   # Deploy via Qlik Cloud Engine API
 │
 └── mashup/                       # Aplicação Next.js 15 + TypeScript + MUI + Nebula.js
     └── src/{app,components,services,hooks,types,lib}
@@ -68,7 +70,8 @@ Escalonamento por KPI: `≥ 90% → 50%` · `≥ 95% → 70%` · `≥ 100% → 1
 ### 1. Qlik Cloud
 
 1. Crie um app `PPT — Programa Por Performance Tirolez`.
-2. **Preparar → Editor de carregamento de dados**, selecione tudo na aba Main e cole
+2. Gere o arquivo combinado com `node qlik/tools/build-script.mjs` (ou use o que já está
+   versionado). Em **Preparar → Editor de carregamento de dados**, selecione tudo na aba Main e cole
    `qlik/script/ppt-script-completo.qvs` por cima. As linhas `///$tab` são a marcação de
    aba do Qlik — o script roda igual em uma aba só, e ao reabrir o editor o Qlik
    normalmente re-divide nas 12 abas.

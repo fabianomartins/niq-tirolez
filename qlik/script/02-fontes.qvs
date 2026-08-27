@@ -390,8 +390,8 @@ TZ-CHE-150, Cheddar Fatiado 150g,             Fatiados,  Cheddar Fatiado,     15
     //     regiao); slot 6 e a categoria C3 da OUTRA regiao - compra real que
     //     NAO conta para o Hero local (caso de teste proposital).
     // -------------------------------------------------------------------------
-    LET vMockLinhas = $(vMockPDVs) * $(vMesesHistorico) * $(vMockSlots);
-    LET vDiaHoje    = Day('$(vDataHoje)');
+    LET vMockLinhas = Num($(vMockPDVs) * $(vMesesHistorico) * $(vMockSlots), '0');
+    LET vDiaHoje    = Num(Day(Today()), '0');
 
     TRACE >> Gerando ate $(vMockLinhas) linhas candidatas de sell out;
 

@@ -14,7 +14,7 @@ TMP_QA1:
 LOAD Count(FlagVenda) AS QtdSemHero
 RESIDENT FACT_SELL_OUT
 WHERE FlagVenda = 1 AND Len(Trim(%ChaveHero)) = 0;
-LET vQA1 = Peek('QtdSemHero', 0, 'TMP_QA1');
+LET vQA1 = Num(Alt(Peek('QtdSemHero', 0, 'TMP_QA1'), 0), '0');
 DROP TABLE TMP_QA1;
 
 IF $(vQA1) > 0 THEN
@@ -51,7 +51,7 @@ TMP_QA3:
 LOAD Count(%ChaveDistMes) AS QtdEstouro
 RESIDENT FACT_PPT_MENSAL
 WHERE PremioTotal > PremioPotencialTotal + 0.01;
-LET vQA3 = Peek('QtdEstouro', 0, 'TMP_QA3');
+LET vQA3 = Num(Alt(Peek('QtdEstouro', 0, 'TMP_QA3'), 0), '0');
 DROP TABLE TMP_QA3;
 
 IF $(vQA3) > 0 THEN
@@ -65,7 +65,7 @@ TMP_QA4:
 LOAD Count(%ChaveDistMes) AS QtdMetaZero
 RESIDENT FACT_PPT_MENSAL
 WHERE MetaPositivacao <= 0 OR MetaVolumeTon <= 0 OR MetaMixHero <= 0;
-LET vQA4 = Peek('QtdMetaZero', 0, 'TMP_QA4');
+LET vQA4 = Num(Alt(Peek('QtdMetaZero', 0, 'TMP_QA4'), 0), '0');
 DROP TABLE TMP_QA4;
 
 IF $(vQA4) > 0 THEN

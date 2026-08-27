@@ -3,8 +3,8 @@
    PPT - PROGRAMA POR PERFORMANCE TIROLEZ
    SCRIPT COMPLETO EM ARQUIVO UNICO
    -----------------------------------------------------------------------------
-   Gerado a partir de qlik/script/*.qvs. NAO EDITE ESTE ARQUIVO: ele e derivado.
-   A fonte da verdade sao os 12 arquivos individuais.
+   GERADO POR qlik/tools/build-script.mjs - NAO EDITE ESTE ARQUIVO.
+   A fonte da verdade sao os 12 .qvs individuais em qlik/script/.
 
    COMO USAR
    1. Qlik Cloud > o app > Preparar > Editor de carregamento de dados
@@ -121,12 +121,28 @@ LET vMesesHistorico = 18;                                     // meses carregado
 LET vDataFim       = MonthEnd('$(vDataHoje)');
 LET vDataInicio    = MonthStart(AddMonths('$(vDataHoje)', -($(vMesesHistorico)-1)));
 
-// Versoes numericas - use SEMPRE estas em expressoes de script. Comparar datas
-// como texto depende do DateFormat da sessao e quebra silenciosamente.
-LET vDataInicioNum = Num(MonthStart(AddMonths(Today(), -($(vMesesHistorico)-1))));
-LET vDataFimNum    = Num(MonthEnd(Today()));
-LET vDataHojeNum   = Num(Today());
-LET vAnoMesAtual   = Num(Year('$(vDataHoje)') * 100 + Month('$(vDataHoje)'));
+/* Versoes numericas - use SEMPRE estas em expressoes de script. Comparar datas
+   como texto depende do DateFormat da sessao e quebra silenciosamente.
+
+   ARMADILHA DE LOCALE (nao remova o Floor nem o formato '0'):
+   LET AVALIA a expressao e guarda o RESULTADO COMO TEXTO, usando o DecimalSep
+   e o ThousandSep da sessao. Em pt-BR o separador decimal e virgula.
+
+   MonthEnd(Today()) devolve 31/08/2026 23:59:59, ou seja 46265,99999988.
+   Sem tratamento, $(vDataFimNum) injeta essa virgula no meio da expressao e o
+   Qlik a le como separador de argumento:
+       WHERE Num(Data) <= 46265,99999988      -> "Unexpected token: ','"
+
+   Floor() elimina a fracao de hora e Num(...,'0') forca inteiro puro, sem
+   separador de milhar. O mesmo vale para qualquer LET numerico expandido
+   dentro de codigo. Verificado por qlik/tools/build-script.mjs (QA-06B). */
+LET vDataInicioNum = Num(Floor(MonthStart(AddMonths(Today(), -($(vMesesHistorico)-1)))), '0');
+LET vDataFimNum    = Num(Floor(MonthEnd(Today())), '0');
+LET vDataHojeNum   = Num(Floor(Today()), '0');
+LET vAnoMesAtual   = Num(Year(Today()) * 100 + Month(Today()), '0');
+
+// Inicio da janela de 6 meses usada nos rankings de SKU (aba 09)
+LET vDataU6MNum    = Num(Floor(MonthStart(AddMonths(Today(), -5))), '0');
 LET vAnoMesAtualTxt = Date('$(vDataHoje)', 'YYYY-MM');
 
 TRACE >> Janela de carga: $(vDataInicio) ate $(vDataFim)  |  Mes corrente: $(vAnoMesAtualTxt);
@@ -599,8 +615,8 @@ TZ-CHE-150, Cheddar Fatiado 150g,             Fatiados,  Cheddar Fatiado,     15
     //     regiao); slot 6 e a categoria C3 da OUTRA regiao - compra real que
     //     NAO conta para o Hero local (caso de teste proposital).
     // -------------------------------------------------------------------------
-    LET vMockLinhas = $(vMockPDVs) * $(vMesesHistorico) * $(vMockSlots);
-    LET vDiaHoje    = Day('$(vDataHoje)');
+    LET vMockLinhas = Num($(vMockPDVs) * $(vMesesHistorico) * $(vMockSlots), '0');
+    LET vDiaHoje    = Num(Day(Today()), '0');
 
     TRACE >> Gerando ate $(vMockLinhas) linhas candidatas de sell out;
 
@@ -1630,11 +1646,11 @@ MAP_PPT_GANHOVOL:   MAPPING LOAD %ChaveDistMes, GanhoProxDegrauVolume     RESIDE
 
 // Indice continuo de mes: idx = Ano * 12 + (Mes - 1). Aritmetica de janela sem
 // dor de cabeca com virada de ano.
-LET vIdxAtual   = Year('$(vDataHoje)') * 12 + Month('$(vDataHoje)') - 1;
-LET vIdxInicio  = $(vIdxAtual) - $(vMesesHistorico) + 1;
+LET vIdxAtual   = Num(Year(Today()) * 12 + Month(Today()) - 1, '0');
+LET vIdxInicio  = Num($(vIdxAtual) - $(vMesesHistorico) + 1, '0');
 // So faz sentido calcular oportunidade a partir do 4o mes da janela (precisa
 // de 3 meses de historico atras dele).
-LET vIdxPrimeiroAlvo = $(vIdxInicio) + $(vJanelaRecenciaMeses);
+LET vIdxPrimeiroAlvo = Num($(vIdxInicio) + $(vJanelaRecenciaMeses), '0');
 
 /* =============================================================================
    1. TABELA DE PRESENCA (PDV x mes com compra)
@@ -1918,8 +1934,6 @@ TRACE >> OPP_RECUPERACAO: $(vLinhasOppRec) PDVs abaixo da media historica;
 //     Penetracao, nao volume: para completar mix o que importa e o SKU que o
 //     canal mais aceita, nao o que gera mais tonelada.
 // -----------------------------------------------------------------------------
-LET vIdxRank = $(vIdxAtual) - 5;   // ultimos 6 meses
-
 TMP_RANK_BASE:
 LOAD
     RankRegiaoHero & '|' & RankCatNum & '|' & RankCanal      AS %RankGrupoCanal,
@@ -1937,6 +1951,7 @@ LOAD
     VolumeTon                                                AS RankVolumeTon
 RESIDENT FACT_SELL_OUT
 WHERE FlagVenda = 1
+  AND %ChaveData >= $(vDataU6MNum)
   AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
 
 TMP_RANK_CANAL:
@@ -1975,6 +1990,7 @@ LOAD
     %ChaveData                                               AS HistData
 RESIDENT FACT_SELL_OUT
 WHERE FlagVenda = 1
+  AND %ChaveData >= $(vDataU6MNum)
   AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
 
 TMP_HIST_CAT:
@@ -2232,7 +2248,7 @@ TMP_QA1:
 LOAD Count(FlagVenda) AS QtdSemHero
 RESIDENT FACT_SELL_OUT
 WHERE FlagVenda = 1 AND Len(Trim(%ChaveHero)) = 0;
-LET vQA1 = Peek('QtdSemHero', 0, 'TMP_QA1');
+LET vQA1 = Num(Alt(Peek('QtdSemHero', 0, 'TMP_QA1'), 0), '0');
 DROP TABLE TMP_QA1;
 
 IF $(vQA1) > 0 THEN
@@ -2269,7 +2285,7 @@ TMP_QA3:
 LOAD Count(%ChaveDistMes) AS QtdEstouro
 RESIDENT FACT_PPT_MENSAL
 WHERE PremioTotal > PremioPotencialTotal + 0.01;
-LET vQA3 = Peek('QtdEstouro', 0, 'TMP_QA3');
+LET vQA3 = Num(Alt(Peek('QtdEstouro', 0, 'TMP_QA3'), 0), '0');
 DROP TABLE TMP_QA3;
 
 IF $(vQA3) > 0 THEN
@@ -2283,7 +2299,7 @@ TMP_QA4:
 LOAD Count(%ChaveDistMes) AS QtdMetaZero
 RESIDENT FACT_PPT_MENSAL
 WHERE MetaPositivacao <= 0 OR MetaVolumeTon <= 0 OR MetaMixHero <= 0;
-LET vQA4 = Peek('QtdMetaZero', 0, 'TMP_QA4');
+LET vQA4 = Num(Alt(Peek('QtdMetaZero', 0, 'TMP_QA4'), 0), '0');
 DROP TABLE TMP_QA4;
 
 IF $(vQA4) > 0 THEN

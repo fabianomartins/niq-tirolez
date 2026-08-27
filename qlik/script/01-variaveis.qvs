@@ -25,12 +25,28 @@ LET vMesesHistorico = 18;                                     // meses carregado
 LET vDataFim       = MonthEnd('$(vDataHoje)');
 LET vDataInicio    = MonthStart(AddMonths('$(vDataHoje)', -($(vMesesHistorico)-1)));
 
-// Versoes numericas - use SEMPRE estas em expressoes de script. Comparar datas
-// como texto depende do DateFormat da sessao e quebra silenciosamente.
-LET vDataInicioNum = Num(MonthStart(AddMonths(Today(), -($(vMesesHistorico)-1))));
-LET vDataFimNum    = Num(MonthEnd(Today()));
-LET vDataHojeNum   = Num(Today());
-LET vAnoMesAtual   = Num(Year('$(vDataHoje)') * 100 + Month('$(vDataHoje)'));
+/* Versoes numericas - use SEMPRE estas em expressoes de script. Comparar datas
+   como texto depende do DateFormat da sessao e quebra silenciosamente.
+
+   ARMADILHA DE LOCALE (nao remova o Floor nem o formato '0'):
+   LET AVALIA a expressao e guarda o RESULTADO COMO TEXTO, usando o DecimalSep
+   e o ThousandSep da sessao. Em pt-BR o separador decimal e virgula.
+
+   MonthEnd(Today()) devolve 31/08/2026 23:59:59, ou seja 46265,99999988.
+   Sem tratamento, $(vDataFimNum) injeta essa virgula no meio da expressao e o
+   Qlik a le como separador de argumento:
+       WHERE Num(Data) <= 46265,99999988      -> "Unexpected token: ','"
+
+   Floor() elimina a fracao de hora e Num(...,'0') forca inteiro puro, sem
+   separador de milhar. O mesmo vale para qualquer LET numerico expandido
+   dentro de codigo. Verificado por qlik/tools/build-script.mjs (QA-06B). */
+LET vDataInicioNum = Num(Floor(MonthStart(AddMonths(Today(), -($(vMesesHistorico)-1)))), '0');
+LET vDataFimNum    = Num(Floor(MonthEnd(Today())), '0');
+LET vDataHojeNum   = Num(Floor(Today()), '0');
+LET vAnoMesAtual   = Num(Year(Today()) * 100 + Month(Today()), '0');
+
+// Inicio da janela de 6 meses usada nos rankings de SKU (aba 09)
+LET vDataU6MNum    = Num(Floor(MonthStart(AddMonths(Today(), -5))), '0');
 LET vAnoMesAtualTxt = Date('$(vDataHoje)', 'YYYY-MM');
 
 TRACE >> Janela de carga: $(vDataInicio) ate $(vDataFim)  |  Mes corrente: $(vAnoMesAtualTxt);

@@ -6,6 +6,11 @@ abaixo tem resultado esperado estável.
 
 Severidade: **🔴 Bloqueia release** · **🟡 Corrige antes do go-live** · **🟢 Melhoria**
 
+> **Sobre QA-06B.** Expansão de dólar (`$(var)`) não é visível em revisão de código: o texto
+> só existe em tempo de execução. Um `LET` que avalia `MonthEnd()` guarda `46265,99999988` em
+> locale pt-BR, e a vírgula vira separador de argumento dentro da expressão. O lint em
+> `qlik/tools/build-script.mjs` verifica essa classe de erro estaticamente.
+
 ---
 
 ## 1. Modelo de dados
@@ -18,6 +23,7 @@ Severidade: **🔴 Bloqueia release** · **🟡 Corrige antes do go-live** · **
 | QA-04 | Chaves compostas sem nulo em linha de venda | `Count({<FlagVenda={1}>} If(Len(%ChaveDistPdvMes)=0,1))` | 0 | 🔴 |
 | QA-05 | Pesos do script = pesos das variáveis do app | Comparar `01-variaveis.qvs` com `variables.json` e `lib/status.ts` | 0,0070 / 0,0070 / 0,0060 nos três | 🔴 |
 | QA-06 | Grão do fato é único por documento+SKU+dia | `Count(FACT_SELL_OUT) = Count(DISTINCT NumeroDocumento & '\|' & %ChaveProduto)` | igual | 🟡 |
+| QA-06B | Nenhum `LET` numérico expandido em código sem formato fixo | `node qlik/tools/build-script.mjs --check` | Lint OK | 🔴 |
 | QA-07 | Subcategoria Hero grafada corretamente | Abrir `QA_REJEITADOS`, filtrar motivo "Subcategoria fora da composição Hero" | Nenhuma das 10 subcategorias Hero na lista | 🔴 |
 | QA-08 | `DIM_PDV` sem CNPJ duplicado | `Count(DIM_PDV) = Count(DISTINCT CNPJ)` | igual | 🔴 |
 | QA-09 | Toda venda tem chave Hero resolvida | Log de carga | `vQA1 = 0` | 🟡 |
@@ -123,6 +129,9 @@ Severidade: **🔴 Bloqueia release** · **🟡 Corrige antes do go-live** · **
 ## Roteiro de regressão (executar a cada release)
 
 ```bash
+# 0. Script Qlik — lint e arquivo combinado
+node qlik/tools/build-script.mjs --check     # QA-06B
+
 # 1. Qualidade de código e regra
 cd mashup
 npm run typecheck        # QA-62
