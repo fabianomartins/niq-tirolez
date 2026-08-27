@@ -14,12 +14,13 @@
  * Dependencias:  npm i enigma.js ws
  */
 
+// enigma.js e ws sao carregados sob demanda dentro de openApp(). Import estatico
+// aqui derruba o script com stack trace antes mesmo de validar os parametros -
+// pessima primeira experiencia para quem esqueceu o npm install.
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import enigma from 'enigma.js';
-import WebSocket from 'ws';
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -29,10 +30,11 @@ const ITEMS_DIR = join(__dirname, '..', 'master-items');
 // Argumentos
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const args = { dryRun: false, only: null, appId: null };
+  const args = { dryRun: false, only: null, appId: null, validate: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--app') args.appId = argv[i + 1];
     else if (argv[i] === '--dry-run') args.dryRun = true;
+    else if (argv[i] === '--validate') args.validate = true;
     else if (argv[i] === '--only') args.only = argv[i + 1];
   }
   return args;
@@ -42,13 +44,103 @@ const args = parseArgs(process.argv.slice(2));
 const TENANT = process.env.QLIK_TENANT;
 const API_KEY = process.env.QLIK_API_KEY;
 
-if (!args.appId || !TENANT || !API_KEY) {
-  console.error(
-    'Faltam parametros.\n' +
-      '  --app <APP_ID>        (obrigatorio)\n' +
-      '  QLIK_TENANT           (obrigatorio)\n' +
-      '  QLIK_API_KEY          (obrigatorio)',
-  );
+/**
+ * Validacao OFFLINE dos JSON: nao conecta em nada. Confere o que da para
+ * conferir sem tenant - id unico, expressao nao vazia, formato coerente - e
+ * exercita o mapeamento para as propriedades do Engine.
+ */
+async function validarOffline() {
+  const problemas = [];
+  const ler = async (n) => JSON.parse(await readFile(join(ITEMS_DIR, n), 'utf8'));
+
+  const medidas = (await ler('measures.json')).measures;
+  const dimensoes = (await ler('dimensions.json')).dimensions;
+  const variaveis = (await ler('variables.json')).variables;
+  const bookmarks = (await ler('bookmarks.json')).bookmarks;
+
+  const vistos = new Set();
+  const checarId = (id, onde) => {
+    if (!id) problemas.push(`${onde}: sem id`);
+    else if (vistos.has(id)) problemas.push(`${onde}: id duplicado "${id}"`);
+    else vistos.add(id);
+  };
+
+  for (const m of medidas) {
+    checarId(m.id, `medida "${m.title}"`);
+    if (!m.title || m.title.length < 3 || m.title.length > 127) {
+      problemas.push(`medida ${m.id}: titulo precisa ter 3 a 127 caracteres`);
+    }
+    if (!m.expression?.trim()) problemas.push(`medida ${m.id}: expressao vazia`);
+    // parenteses balanceados detecta a maioria dos erros de digitacao
+    const abre = (m.expression.match(/\(/g) ?? []).length;
+    const fecha = (m.expression.match(/\)/g) ?? []).length;
+    if (abre !== fecha) problemas.push(`medida ${m.id}: parenteses desbalanceados`);
+    measureProps(m);
+  }
+
+  for (const d of dimensoes) {
+    checarId(d.id, `dimensao "${d.title}"`);
+    if (!Array.isArray(d.fields) || d.fields.length === 0) {
+      problemas.push(`dimensao ${d.id}: sem campos`);
+    }
+    if (d.grouping === 'H' && d.fields.length < 2) {
+      problemas.push(`dimensao ${d.id}: drill-down precisa de 2+ niveis`);
+    }
+    if (d.labels && d.labels.length !== d.fields.length) {
+      problemas.push(`dimensao ${d.id}: labels e fields com tamanhos diferentes`);
+    }
+    dimensionProps(d);
+  }
+
+  for (const v of variaveis) {
+    if (!v.name) problemas.push('variavel sem nome');
+    if (v.definition === undefined) problemas.push(`variavel ${v.name}: sem definicao`);
+  }
+
+  for (const b of bookmarks) {
+    checarId(b.id, `bookmark "${b.title}"`);
+    for (const sel of b.selections ?? []) {
+      if (!sel.field || !Array.isArray(sel.values)) {
+        problemas.push(`bookmark ${b.id}: selecao malformada`);
+      }
+    }
+  }
+
+  console.log(`  medidas ...... ${medidas.length}`);
+  console.log(`  dimensoes .... ${dimensoes.length}`);
+  console.log(`  variaveis .... ${variaveis.length}`);
+  console.log(`  bookmarks .... ${bookmarks.length}`);
+
+  if (problemas.length > 0) {
+    console.error(`\n${problemas.length} problema(s):`);
+    for (const p of problemas) console.error(`  x ${p}`);
+    process.exit(1);
+  }
+  console.log('\nValidacao offline OK.\n');
+}
+
+if (args.validate) {
+  console.log('\nPPT Tirolez - validacao offline dos itens mestre\n');
+  await validarOffline();
+  process.exit(0);
+}
+
+const faltando = [];
+if (!args.appId) faltando.push('--app <APP_ID>');
+if (!TENANT) faltando.push('variavel de ambiente QLIK_TENANT');
+if (!API_KEY) faltando.push('variavel de ambiente QLIK_API_KEY');
+
+if (faltando.length > 0) {
+  console.error(`\nFalta informar: ${faltando.join(', ')}\n`);
+  console.error('  cd qlik/tools && npm install');
+  console.error('  export QLIK_TENANT="seu-tenant.us.qlikcloud.com"');
+  console.error('  export QLIK_API_KEY="..."   # Perfil > Console > Chaves de API');
+  console.error('  node deploy-master-items.mjs --app <APP_ID> [--dry-run] [--only measures]\n');
+  process.exit(1);
+}
+
+if (!/^[0-9a-f-]{36}$/i.test(args.appId)) {
+  console.error(`\n--app deve ser o UUID do app. Recebido: "${args.appId}"\n`);
   process.exit(1);
 }
 
@@ -56,8 +148,18 @@ if (!args.appId || !TENANT || !API_KEY) {
 // Conexao
 // ---------------------------------------------------------------------------
 async function openApp(appId) {
-  // Resolve o schema pelo package instalado - nao fixar caminho de node_modules
-  const schema = require('enigma.js/schemas/12.2015.0.json');
+  let enigma;
+  let WebSocket;
+  let schema;
+  try {
+    ({ default: enigma } = await import('enigma.js'));
+    ({ default: WebSocket } = await import('ws'));
+    // Resolve o schema pelo package instalado - nao fixar caminho de node_modules
+    schema = require('enigma.js/schemas/12.2015.0.json');
+  } catch {
+    console.error('\nDependencias ausentes. Rode:  cd qlik/tools && npm install\n');
+    process.exit(1);
+  }
 
   const session = enigma.create({
     schema,

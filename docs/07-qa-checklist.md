@@ -139,7 +139,8 @@ Severidade: **🔴 Bloqueia release** · **🟡 Corrige antes do go-live** · **
 
 ```bash
 # 0. Script Qlik — lint e arquivo combinado
-node qlik/tools/build-script.mjs --check     # QA-06B
+node qlik/tools/build-script.mjs --check              # QA-06B
+node qlik/tools/deploy-master-items.mjs --validate    # itens mestre
 
 # 1. Qualidade de código e regra
 cd mashup

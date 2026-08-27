@@ -137,6 +137,7 @@ npm install                      # enigma.js + ws
 export QLIK_TENANT="seu-tenant.us.qlikcloud.com"
 export QLIK_API_KEY="..."        # Perfil → Configurações do console → Chaves de API
 
+node deploy-master-items.mjs --validate                 # só valida os JSON, sem conectar
 node deploy-master-items.mjs --app <APP_ID> --dry-run   # mostra o que faria
 node deploy-master-items.mjs --app <APP_ID>             # aplica
 ```
@@ -147,7 +148,8 @@ Opções úteis:
 
 | Flag | Efeito |
 |---|---|
-| `--dry-run` | Lista o que seria criado/atualizado, sem escrever |
+| `--validate` | Valida os JSON offline: id único, expressão não vazia, parênteses balanceados, drill-down com 2+ níveis. Não conecta em nada |
+| `--dry-run` | Lista o que seria criado/atualizado, sem escrever. Conecta, para saber o que já existe |
 | `--only measures` | Restringe a `measures`, `dimensions`, `variables` ou `bookmarks` |
 
 A chave de API nunca entra no repositório nem no bundle do mashup — é variável de ambiente da
