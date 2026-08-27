@@ -27,14 +27,14 @@
 │  +premiação R$)  │            │  status, gap)      │       └─────────────────┘
 └──────────────────┘            └─────────┬──────────┘
                                           │ %ChaveDistPdvMes
-                       ┌──────────────────┴───────────────────┐
-              ┌────────▼─────────┐                  ┌─────────▼────────┐
-              │ OPP_POSITIVACAO  │                  │     OPP_HERO     │
-              │ (PDV a recuperar)│                  │ (SKU a vender)   │
-              └──────────────────┘                  └──────────────────┘
+             ┌────────────────────────────┼────────────────────────────┐
+   ┌─────────▼────────┐         ┌─────────▼────────┐         ┌─────────▼────────┐
+   │ OPP_POSITIVACAO  │         │ OPP_RECUPERACAO  │         │     OPP_HERO     │
+   │  (PDV que sumiu) │         │(PDV que encolheu)│         │  (SKU a vender)  │
+   └──────────────────┘         └──────────────────┘         └──────────────────┘
 ```
 
-**Leitura do modelo:** `FACT_SELL_OUT` é o centro. As três tabelas de agregação/oportunidade são
+**Leitura do modelo:** `FACT_SELL_OUT` é o centro. As tabelas de agregação e de oportunidade são
 **folhas** penduradas no fato por chaves compostas — nunca ligadas diretamente às dimensões.
 Isso elimina referência circular sem recorrer a link table e mantém a propagação de seleção correta:
 
@@ -91,7 +91,7 @@ Isso elimina referência circular sem recorrer a link table e mantém a propaga�
 | `PDVNome` | TEXT | Razão social |
 | `PDVFantasia` | TEXT | Nome fantasia (usado na UI) |
 | `PDVCanal` | TEXT | Varejo Tradicional / Atacado / Padaria / Food Service |
-| `PDVPorte` | TEXT | A / B / C / D — derivado do volume médio 12m |
+| `PDVPorte` | TEXT | A / B / C / D — **dimensão calculada** (`PPT_D_PORTE_PDV`), não campo do script: depende do período selecionado |
 | `PDVCidade` `PDVUF` | TEXT | |
 | `PDVLatitude` `PDVLongitude` | NUM | Para o mapa da Tela 6 |
 | `PDVDataCadastro` | DATE | |
@@ -153,7 +153,7 @@ conforme a região do distribuidor.
 | Campo | Tipo | Descrição |
 |---|---|---|
 | `%ChaveHero` | TEXT | `RegiaoHero & '\|' & ProdutoSubcategoria` |
-| `CategoriaHero` | TEXT | `Cat 1 — Ricota` / `Cat 2 — Requeijão` / `Cat 3 — Fatiados` ou `Cat 3 — Manteiga` |
+| `CategoriaHero` | TEXT | `Cat 1 - Ricota` / `Cat 2 - Requeijao` / `Cat 3 - Fatiados` ou `Cat 3 - Manteiga` |
 | `CategoriaHeroNum` | INT | 1, 2, 3 — ordenação da matriz |
 | `CategoriaHeroCurta` | TEXT | `C1` / `C2` / `C3` |
 | `FlagHero` | INT | 1 = SKU participa do Mix Hero |
@@ -170,7 +170,7 @@ conforme a região do distribuidor.
 | `%ChaveDistMes` | TEXT | `DistribuidorID & '\|' & AnoMes` — liga a `FACT_PPT_MENSAL` |
 | `%ChaveDistPdvMes` | TEXT | `DistribuidorID & '\|' & CNPJ & '\|' & AnoMes` — liga aos agregados |
 | `QtdCaixas` | NUM | |
-| `VolumeKg` | NUM | `QtdCaixas * ProdutoPesoKg` |
+| `VolumeKg` | NUM | `QtdCaixas * ProdutoPesoCaixaKg` |
 | `VolumeTon` | NUM | `VolumeKg / 1000` — **métrica oficial do KPI Volume** |
 | `ValorSellOut` | NUM | R$ |
 | `FlagVenda` | INT | **1 = linha real de venda · 0 = linha esqueleto** (ver §2.4) |
