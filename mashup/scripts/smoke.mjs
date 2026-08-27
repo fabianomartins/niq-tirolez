@@ -7,6 +7,10 @@
  *
  *   npm run build && npm start &
  *   node scripts/smoke.mjs [--url http://localhost:3000] [--screenshots ./out]
+ *
+ * Em ambientes cujo Chromium nao esta no caminho padrao do Playwright
+ * (containers de CI com browsers pre-instalados), aponte o binario:
+ *   PLAYWRIGHT_CHROMIUM_PATH=/opt/pw-browsers/chromium-<rev>/chrome-linux/chrome
  */
 
 import { mkdir } from 'node:fs/promises';
