@@ -1,0 +1,17 @@
+{
+  "name": "ppt-tirolez-qlik-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ferramentas de build e deploy do app Qlik do PPT Tirolez",
+  "scripts": {
+    "build-script": "node build-script.mjs",
+    "check": "node build-script.mjs --check",
+    "deploy": "node deploy-master-items.mjs"
+  },
+  "dependencies": {
+    "enigma.js": "^2.14.0",
+    "ws": "^8.18.0"
+  },
+  "engines": { "node": ">=20.11" }
+}

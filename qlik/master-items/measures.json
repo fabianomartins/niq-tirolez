@@ -4,363 +4,723 @@
     "oficial_vs_dinamica": "Medidas OFICIAIS leem FACT_PPT_MENSAL (numero apurado, imune a filtro de produto/canal - e o que paga). Medidas DINAMICAS recalculam sobre FACT_SELL_OUT e respondem a qualquer filtro. Card de KPI usa a OFICIAL; analise exploratoria usa a DINAMICA. Misturar as duas na mesma tabela e o erro classico que gera 'o numero nao bate'.",
     "flagVenda": "Toda medida sobre FACT_SELL_OUT usa {<FlagVenda={1}>} para excluir as linhas-esqueleto."
   },
-
   "measures": [
     {
       "id": "PPT_M_META_POSITIVACAO",
       "title": "Meta Positivação",
       "description": "PDVs que o distribuidor precisa positivar no mês. Fonte: FACT_PPT_MENSAL.",
       "expression": "Sum(MetaPositivacao)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "meta", "positivacao", "oficial"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "meta",
+        "positivacao",
+        "oficial"
+      ]
     },
     {
       "id": "PPT_M_REAL_POSITIVACAO",
       "title": "Positivação Realizada",
       "description": "CNPJs únicos positivados no mês, valor apurado. NÃO reage a filtro de produto — é o número que paga.",
       "expression": "Sum(RealPositivacao)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "realizado", "positivacao", "oficial"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "realizado",
+        "positivacao",
+        "oficial"
+      ]
     },
     {
       "id": "PPT_M_REAL_POSITIVACAO_DIN",
       "title": "Positivação (dinâmica)",
       "description": "CNPJs únicos com venda no contexto atual. Reage a filtro de produto, canal e categoria Hero. Use para análise, nunca para conferir premiação.",
       "expression": "Count(DISTINCT {<FlagVenda={1}>} %ChavePDV)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "realizado", "positivacao", "dinamica"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "realizado",
+        "positivacao",
+        "dinamica"
+      ]
     },
     {
       "id": "PPT_M_ATING_POSITIVACAO",
       "title": "% Atingimento Positivação",
       "description": "Realizado / Meta. Abaixo de 90% não há premiação neste KPI.",
       "expression": "If(Sum(MetaPositivacao) > 0, Sum(RealPositivacao) / Sum(MetaPositivacao), 0)",
-      "format": { "type": "F", "fmt": "#.##0,0%", "nDec": 1 },
-      "tags": ["ppt", "atingimento", "positivacao"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0%",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "atingimento",
+        "positivacao"
+      ]
     },
-
     {
       "id": "PPT_M_META_VOLUME",
       "title": "Meta Volume (ton)",
       "description": "Meta mensal de sell out em toneladas.",
       "expression": "Sum(MetaVolumeTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["ppt", "meta", "volume", "oficial"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "meta",
+        "volume",
+        "oficial"
+      ]
     },
     {
       "id": "PPT_M_REAL_VOLUME",
       "title": "Volume Realizado (ton)",
       "description": "Sell out em toneladas. Reage a qualquer filtro — volume é aditivo, então oficial e dinâmica coincidem quando não há filtro de produto.",
       "expression": "Sum({<FlagVenda={1}>} VolumeTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["ppt", "realizado", "volume"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "realizado",
+        "volume"
+      ]
     },
     {
       "id": "PPT_M_ATING_VOLUME",
       "title": "% Atingimento Volume",
       "expression": "If(Sum(MetaVolumeTon) > 0, Sum(RealVolumeTon) / Sum(MetaVolumeTon), 0)",
       "description": "Realizado apurado / Meta.",
-      "format": { "type": "F", "fmt": "#.##0,0%", "nDec": 1 },
-      "tags": ["ppt", "atingimento", "volume"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0%",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "atingimento",
+        "volume"
+      ]
     },
-
     {
       "id": "PPT_M_META_HERO",
       "title": "Meta Mix Hero (PDVs)",
       "description": "Quantidade de PDVs que precisam ser Hero no mês.",
       "expression": "Sum(MetaMixHero)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "meta", "hero", "oficial"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "meta",
+        "hero",
+        "oficial"
+      ]
     },
     {
       "id": "PPT_M_REAL_HERO",
       "title": "PDVs Mix Hero",
       "description": "PDVs que compraram ≥1 SKU de cada uma das 3 categorias Hero da região.",
       "expression": "Sum(RealMixHero)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "realizado", "hero", "oficial"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "realizado",
+        "hero",
+        "oficial"
+      ]
     },
     {
       "id": "PPT_M_REAL_HERO_DIN",
       "title": "PDVs Mix Hero (dinâmica)",
       "description": "Conta PDVs Hero no contexto selecionado, direto do agregado AGG_HERO_PDV_MES.",
       "expression": "Sum(FlagPdvHero)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "realizado", "hero", "dinamica"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "realizado",
+        "hero",
+        "dinamica"
+      ]
     },
     {
       "id": "PPT_M_ATING_HERO",
       "title": "% Atingimento Mix Hero",
       "expression": "If(Sum(MetaMixHero) > 0, Sum(RealMixHero) / Sum(MetaMixHero), 0)",
-      "format": { "type": "F", "fmt": "#.##0,0%", "nDec": 1 },
-      "tags": ["ppt", "atingimento", "hero"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0%",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "atingimento",
+        "hero"
+      ]
     },
     {
       "id": "PPT_M_TAXA_HERO",
       "title": "% PDVs Hero sobre positivados",
       "description": "Densidade de mix na base ativa. Sobe quando o distribuidor aprofunda mix, não quando só abre PDV novo.",
       "expression": "If(Sum(RealPositivacao) > 0, Sum(RealMixHero) / Sum(RealPositivacao), 0)",
-      "format": { "type": "F", "fmt": "#.##0,0%", "nDec": 1 },
-      "tags": ["ppt", "hero", "qualidade"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0%",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "hero",
+        "qualidade"
+      ]
     },
-
     {
       "id": "PPT_M_PREMIO_TOTAL",
       "title": "Premiação Estimada (R$)",
       "description": "Soma dos três KPIs já com o fator de escalonamento aplicado.",
       "expression": "Sum(PremioTotal)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao", "oficial"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao",
+        "oficial"
+      ]
     },
     {
       "id": "PPT_M_PREMIO_POTENCIAL",
       "title": "Premiação Potencial (R$)",
       "description": "Teto do programa: 2% do sell-in do mês.",
       "expression": "Sum(PremioPotencialTotal)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao"
+      ]
     },
     {
       "id": "PPT_M_PREMIO_NAO_CAPTURADO",
       "title": "Dinheiro na mesa (R$)",
       "description": "Diferença entre o teto e o que está sendo capturado. É o tamanho da oportunidade em reais.",
       "expression": "Sum(PremioNaoCapturado)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao", "oportunidade"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao",
+        "oportunidade"
+      ]
     },
     {
       "id": "PPT_M_PREMIO_PROJETADO",
       "title": "Premiação Projetada (R$)",
       "description": "Premiação se o ritmo atual de dias úteis se mantiver até o fim do mês.",
       "expression": "Sum(PremioProjetado)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao", "projecao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao",
+        "projecao"
+      ]
     },
     {
       "id": "PPT_M_CAPTURA_PREMIO",
       "title": "% Captura da Premiação",
       "expression": "If(Sum(PremioPotencialTotal) > 0, Sum(PremioTotal) / Sum(PremioPotencialTotal), 0)",
-      "format": { "type": "F", "fmt": "#.##0,0%", "nDec": 1 },
-      "tags": ["ppt", "premiacao"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0%",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "premiacao"
+      ]
     },
     {
       "id": "PPT_M_PREMIO_POSITIVACAO",
       "title": "Prêmio Positivação (R$)",
       "expression": "Sum(PremioPositivacao)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao", "positivacao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao",
+        "positivacao"
+      ]
     },
     {
       "id": "PPT_M_PREMIO_VOLUME",
       "title": "Prêmio Volume (R$)",
       "expression": "Sum(PremioVolume)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao", "volume"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao",
+        "volume"
+      ]
     },
     {
       "id": "PPT_M_PREMIO_HERO",
       "title": "Prêmio Mix Hero (R$)",
       "expression": "Sum(PremioMixHero)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "premiacao", "hero"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "premiacao",
+        "hero"
+      ]
     },
-
     {
       "id": "PPT_M_GAP_POSITIVACAO",
       "title": "PDVs para o próximo degrau",
       "description": "Quantos CNPJs ainda precisam ser positivados para cruzar 90%, 95% ou 100% — o que estiver logo à frente.",
       "expression": "Sum(GapPositivacaoUn)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "gap", "acionavel", "positivacao"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "acionavel",
+        "positivacao"
+      ]
     },
     {
       "id": "PPT_M_GAP_VOLUME",
       "title": "Toneladas para o próximo degrau",
       "expression": "Sum(GapVolumeTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["ppt", "gap", "acionavel", "volume"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "acionavel",
+        "volume"
+      ]
     },
     {
       "id": "PPT_M_GAP_HERO",
       "title": "PDVs Hero para o próximo degrau",
       "expression": "Sum(GapMixHeroUn)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "gap", "acionavel", "hero"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "acionavel",
+        "hero"
+      ]
     },
     {
       "id": "PPT_M_GANHO_PROX_DEGRAU",
       "title": "Ganho ao cruzar o próximo degrau (R$)",
       "description": "Quanto entra no bolso do distribuidor se ele cruzar o próximo degrau dos três KPIs. É a métrica que converte esforço comercial em dinheiro.",
       "expression": "Sum(GanhoProxDegrauTotal)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "gap", "acionavel", "premiacao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "acionavel",
+        "premiacao"
+      ]
     },
     {
       "id": "PPT_M_GAP100_POSITIVACAO",
       "title": "PDVs para 100% da meta",
       "expression": "Sum(Gap100PositivacaoUn)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "gap", "positivacao"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "positivacao"
+      ]
     },
     {
       "id": "PPT_M_GAP100_VOLUME",
       "title": "Toneladas para 100% da meta",
       "expression": "Sum(Gap100VolumeTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["ppt", "gap", "volume"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "volume"
+      ]
     },
     {
       "id": "PPT_M_GAP100_HERO",
       "title": "PDVs Hero para 100% da meta",
       "expression": "Sum(Gap100MixHeroUn)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["ppt", "gap", "hero"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "ppt",
+        "gap",
+        "hero"
+      ]
     },
-
     {
       "id": "PPT_M_PROJ_VOLUME",
       "title": "Volume projetado (ton)",
       "expression": "Sum(ProjVolumeTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["ppt", "projecao", "volume"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "ppt",
+        "projecao",
+        "volume"
+      ]
     },
     {
       "id": "PPT_M_RITMO_NECESSARIO",
       "title": "Ritmo necessário (ton/dia útil)",
       "description": "Quanto o distribuidor precisa vender por dia útil restante para fechar em 100%. Zero quando a meta já foi batida.",
       "expression": "If(Max(DiasUteisTotais) - Max(DiasUteisDecorridos) > 0, Sum(Gap100VolumeTon) / (Max(DiasUteisTotais) - Max(DiasUteisDecorridos)), 0)",
-      "format": { "type": "F", "fmt": "#.##0,00", "nDec": 2 },
-      "tags": ["ppt", "projecao", "acionavel"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "projecao",
+        "acionavel"
+      ]
     },
-
     {
       "id": "PPT_M_OPP_PDVS_RECUPERAR",
       "title": "PDVs a recuperar",
       "description": "Compraram em algum dos últimos 3 meses e não compraram no mês selecionado.",
       "expression": "Count(DISTINCT OppPos_CNPJ)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["oportunidade", "positivacao", "acionavel"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "oportunidade",
+        "positivacao",
+        "acionavel"
+      ]
     },
     {
       "id": "PPT_M_OPP_VOLUME_PERDIDO",
       "title": "Volume potencial perdido (ton)",
       "description": "Soma da média mensal dos últimos 3 meses dos PDVs que sumiram.",
       "expression": "Sum(OppPos_VolumePotencialPerdidoTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["oportunidade", "positivacao"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "oportunidade",
+        "positivacao"
+      ]
     },
     {
       "id": "PPT_M_OPP_VALOR_POR_PDV",
       "title": "Valor por PDV recuperado (R$)",
       "description": "Rateio do ganho do próximo degrau de positivação pelo número de PDVs que ainda faltam.",
       "expression": "Avg(OppPos_ValorPorPdvRecuperado)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["oportunidade", "positivacao", "premiacao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "oportunidade",
+        "positivacao",
+        "premiacao"
+      ]
     },
     {
       "id": "PPT_M_OPP_CRITICOS",
       "title": "PDVs de recuperação crítica",
       "expression": "Count(DISTINCT {<OppPos_Faixa={'Critico'}>} OppPos_CNPJ)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["oportunidade", "positivacao", "acionavel"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "oportunidade",
+        "positivacao",
+        "acionavel"
+      ]
     },
-
     {
       "id": "PPT_M_HERO_FALTA1",
       "title": "PDVs a 1 categoria do Hero",
       "description": "A fila de conversão mais barata que existe: uma visita, um SKU, +1 PDV Hero.",
       "expression": "Count(DISTINCT {<HeroStatus={'Falta 1'}>} %ChaveDistPdvMes)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["oportunidade", "hero", "acionavel"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "oportunidade",
+        "hero",
+        "acionavel"
+      ]
     },
     {
       "id": "PPT_M_HERO_FALTA2",
       "title": "PDVs a 2+ categorias do Hero",
       "expression": "Count(DISTINCT {<HeroStatus={'Falta 2+'}>} %ChaveDistPdvMes)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["oportunidade", "hero"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "oportunidade",
+        "hero"
+      ]
     },
     {
       "id": "PPT_M_HERO_OPP_PRIORITARIAS",
       "title": "Recomendações Hero prioritárias",
       "expression": "Count({<OppHero_Faixa={'Critico', 'Alto'}>} OppHero_CNPJ)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["oportunidade", "hero", "acionavel"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "oportunidade",
+        "hero",
+        "acionavel"
+      ]
     },
     {
       "id": "PPT_M_HERO_VALOR_CONVERSAO",
       "title": "Valor médio por conversão Hero (R$)",
       "expression": "Avg({<OppHero_ConverteSozinho={1}>} OppHero_ValorPorConversao)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["oportunidade", "hero", "premiacao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "oportunidade",
+        "hero",
+        "premiacao"
+      ]
     },
-
     {
       "id": "PPT_M_REC_QUEDA_TON",
       "title": "Queda vs média 3 meses (ton)",
       "expression": "Sum(OppRec_QuedaTon)",
-      "format": { "type": "F", "fmt": "#.##0,0", "nDec": 1 },
-      "tags": ["oportunidade", "recuperacao", "volume"]
+      "format": {
+        "type": "F",
+        "fmt": "#.##0,0",
+        "nDec": 1
+      },
+      "tags": [
+        "oportunidade",
+        "recuperacao",
+        "volume"
+      ]
     },
     {
       "id": "PPT_M_REC_PDVS",
       "title": "PDVs abaixo da própria média",
       "expression": "Count(DISTINCT OppRec_CNPJ)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["oportunidade", "recuperacao", "acionavel"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "oportunidade",
+        "recuperacao",
+        "acionavel"
+      ]
     },
     {
       "id": "PPT_M_REC_VALOR_POTENCIAL",
       "title": "Valor recuperável (R$)",
       "description": "Quanto do ganho do degrau de volume seria coberto se estes PDVs voltassem à própria média.",
       "expression": "Sum(OppRec_ValorPotencial)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["oportunidade", "recuperacao", "premiacao"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "oportunidade",
+        "recuperacao",
+        "premiacao"
+      ]
     },
-
     {
       "id": "PPT_M_DIST_ATIVOS",
       "title": "Distribuidores ativos",
       "expression": "Count(DISTINCT {<FlagDistribuidorElegivel={1}>} DistribuidorID)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["executivo"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "executivo"
+      ]
     },
     {
       "id": "PPT_M_DIST_RISCO",
       "title": "Distribuidores em risco",
       "description": "Projeção indica que ao menos um KPI fecha abaixo de 90% — ou seja, perde a premiação daquele KPI.",
       "expression": "Count(DISTINCT {<PPT_StatusRisco={'Risco alto'}>} PPT_DistribuidorID)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["executivo", "risco", "acionavel"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "executivo",
+        "risco",
+        "acionavel"
+      ]
     },
     {
       "id": "PPT_M_DIST_HERO_ABAIXO",
       "title": "Distribuidores com Hero abaixo da meta",
-      "expression": "Count(DISTINCT {<AtingMixHero = {\"<0.9\"}>} PPT_DistribuidorID)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["executivo", "hero", "risco"]
+      "expression": "Count(DISTINCT If(AtingMixHero < 0.9, PPT_DistribuidorID))",
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "executivo",
+        "hero",
+        "risco"
+      ],
+      "description": "Distribuidores cujo Mix Hero está abaixo de 90% — a faixa que não paga nada. Usa If() em vez de busca numérica em set analysis: a string \"<0.9\" é reinterpretada pelo número da sessão e, em locale pt-BR, pode não casar. Literal em expressão sempre usa ponto."
     },
     {
       "id": "PPT_M_DIST_NO_ALVO",
       "title": "Distribuidores no alvo",
       "expression": "Count(DISTINCT {<PPT_StatusRisco={'No alvo'}>} PPT_DistribuidorID)",
-      "format": { "type": "I", "fmt": "#.##0", "nDec": 0 },
-      "tags": ["executivo"]
+      "format": {
+        "type": "I",
+        "fmt": "#.##0",
+        "nDec": 0
+      },
+      "tags": [
+        "executivo"
+      ]
     },
     {
       "id": "PPT_M_SELLIN",
       "title": "Sell-In (R$)",
       "description": "Base de cálculo da premiação.",
       "expression": "Sum(SellInValor)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "base"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "base"
+      ]
     },
     {
       "id": "PPT_M_SELLOUT_VALOR",
       "title": "Sell-Out (R$)",
       "expression": "Sum({<FlagVenda={1}>} ValorSellOut)",
-      "format": { "type": "M", "fmt": "R$ #.##0,00", "nDec": 2 },
-      "tags": ["ppt", "base"]
+      "format": {
+        "type": "M",
+        "fmt": "R$ #.##0,00",
+        "nDec": 2
+      },
+      "tags": [
+        "ppt",
+        "base"
+      ]
     }
   ]
 }

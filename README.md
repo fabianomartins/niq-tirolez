@@ -121,3 +121,34 @@ Detalhamento em [`docs/04-wireframes.md`](docs/04-wireframes.md).
 | 🔵 Azul | `status.info` `#0F6FB5` | Faixa premiada | `95% – 99,9%` |
 | 🟡 Amarelo | `status.warning` `#E8A317` | Risco | `90% – 94,9%` |
 | 🔴 Vermelho | `status.danger` `#C0392B` | Abaixo da meta (sem premiação) | `< 90%` |
+
+---
+
+## Publicando os itens mestre no app Qlik
+
+As 46 medidas, 15 dimensões e 22 variáveis vivem em `qlik/master-items/*.json` — essa é a fonte
+da verdade. O deploy é **idempotente**: procura pelo `ppt_id` gravado em `qMetaDef` e atualiza no
+lugar, então rodar duas vezes não duplica nada.
+
+```bash
+cd qlik/tools
+npm install                      # enigma.js + ws
+
+export QLIK_TENANT="seu-tenant.us.qlikcloud.com"
+export QLIK_API_KEY="..."        # Perfil → Configurações do console → Chaves de API
+
+node deploy-master-items.mjs --app <APP_ID> --dry-run   # mostra o que faria
+node deploy-master-items.mjs --app <APP_ID>             # aplica
+```
+
+Rode **depois da carga**: as medidas referenciam campos que só existem com o modelo montado.
+
+Opções úteis:
+
+| Flag | Efeito |
+|---|---|
+| `--dry-run` | Lista o que seria criado/atualizado, sem escrever |
+| `--only measures` | Restringe a `measures`, `dimensions`, `variables` ou `bookmarks` |
+
+A chave de API nunca entra no repositório nem no bundle do mashup — é variável de ambiente da
+sua máquina.
