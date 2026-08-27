@@ -56,6 +56,7 @@ Isso elimina referência circular sem recorrer a link table e mantém a propaga�
 | `FACT_PPT_MENSAL` | Distribuidor × Mês | ~ 960 linhas |
 | `OPP_POSITIVACAO` | Distribuidor × PDV × Mês de referência | ~ 90 k linhas |
 | `OPP_HERO` | Distribuidor × PDV × Mês × Categoria faltante | ~ 140 k linhas |
+| `OPP_RECUPERACAO` | Distribuidor × PDV × Mês de referência | ~ 60 k linhas |
 
 ---
 
@@ -118,7 +119,9 @@ Isso elimina referência circular sem recorrer a link table e mantém a propaga�
 | `ProdutoCategoria` | TEXT | Categoria comercial (Queijos, Requeijão, Manteiga…) |
 | `ProdutoSubcategoria` | TEXT | **Chave da regra Hero** — ex.: `Creme Ricota Light` |
 | `ProdutoGramatura` | NUM | Em gramas |
-| `ProdutoPesoKg` | NUM | Peso líquido por unidade — converte caixa → tonelada |
+| `ProdutoPesoKg` | NUM | Peso líquido por **unidade** |
+| `ProdutoUnidCaixa` | NUM | Unidades por caixa |
+| `ProdutoPesoCaixaKg` | NUM | `ProdutoPesoKg × ProdutoUnidCaixa` — é este campo que converte caixa → tonelada |
 | `ProdutoMarca` | TEXT | |
 | `FlagProdutoAtivo` | INT | |
 
@@ -224,8 +227,28 @@ O **livro-razão da premiação**. Uma linha por distribuidor × mês.
 | `OppPos_MediaU3MValor` | NUM | R$ |
 | `OppPos_VolumePotencialPerdidoTon` | NUM | = `MediaU3MTon` |
 | `OppPos_EraHero` | INT | 1 se o PDV era Hero em algum dos 3 meses |
-| `OppPos_Score` | NUM | 0–100 — score de prioridade (§3.5) |
+| `OppPos_Score` | NUM | 0–100 — score de prioridade (§3.6 das regras) |
 | `OppPos_Faixa` | TEXT | `Crítico` / `Alto` / `Médio` / `Baixo` |
+| `OppPos_GapDegrauPdvs` | INT | Quantos PDVs faltam ao distribuidor para o próximo degrau |
+| `OppPos_ValorDegrauTotal` | NUM | R$ que o próximo degrau de positivação paga |
+| `OppPos_ValorPorPdvRecuperado` | NUM | `ValorDegrauTotal / GapDegrauPdvs` — rateio |
+
+### OPP_RECUPERACAO
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `%ChaveDistPdvMes` | TEXT | FK |
+| `OppRec_CNPJ` `OppRec_PDVFantasia` `OppRec_PDVCanal` `OppRec_PDVCidade` | TEXT | |
+| `OppRec_AnoMes` | TEXT | Competência de referência |
+| `OppRec_MediaU3MTon` | NUM | Média dos 3 meses anteriores |
+| `OppRec_VolumeMesTon` | NUM | Volume do mês de referência |
+| `OppRec_QuedaTon` | NUM | `MediaU3MTon − VolumeMesTon` |
+| `OppRec_QuedaPerc` | NUM | Queda relativa |
+| `OppRec_GapVolumeTon` | NUM | Gap do distribuidor para o próximo degrau de volume |
+| `OppRec_CoberturaDoGap` | NUM | Fração do gap que este PDV resolve sozinho |
+| `OppRec_ValorPotencial` | NUM | `CoberturaDoGap × GanhoProxDegrauVolume` |
+| `OppRec_Score` | NUM | 0–100 |
+| `OppRec_Faixa` | TEXT | `Crítico` / `Alto` / `Médio` / `Baixo` |
 
 ### OPP_HERO
 
@@ -292,6 +315,7 @@ repositório já embutem esse set. Nenhuma expressão ad-hoc deve somar `VolumeT
 | FACT_SELL_OUT | AGG_HERO_PDV_MES | N:1 | `%ChaveDistPdvMes` |
 | AGG_HERO_PDV_MES | OPP_POSITIVACAO | 1:0..1 | `%ChaveDistPdvMes` |
 | AGG_HERO_PDV_MES | OPP_HERO | 1:0..N | `%ChaveDistPdvMes` |
+| AGG_HERO_PDV_MES | OPP_RECUPERACAO | 1:0..1 | `%ChaveDistPdvMes` |
 | DIM_DISTRIBUIDOR | DIM_REGIAO | N:1 | `%ChaveRegiao` |
 | DIM_DISTRIBUIDOR | DIM_EXECUTIVO | N:1 | `%ChaveExecutivo` |
 
