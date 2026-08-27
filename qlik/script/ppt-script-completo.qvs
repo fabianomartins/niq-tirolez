@@ -1,0 +1,2371 @@
+///$tab 00 - Main
+/* =============================================================================
+   PPT - PROGRAMA POR PERFORMANCE TIROLEZ
+   SCRIPT COMPLETO EM ARQUIVO UNICO
+   -----------------------------------------------------------------------------
+   Gerado a partir de qlik/script/*.qvs. NAO EDITE ESTE ARQUIVO: ele e derivado.
+   A fonte da verdade sao os 12 arquivos individuais.
+
+   COMO USAR
+   1. Qlik Cloud > o app > Preparar > Editor de carregamento de dados
+   2. Selecione TUDO na aba Main (Ctrl+A) e cole este conteudo por cima
+   3. Salvar > Carregar dados
+
+   As linhas '///$tab NOME' sao a marcacao de aba do Qlik. Elas sao comentario
+   para o interpretador: o script roda igual em uma aba so. Ao reabrir o editor
+   depois de salvar, o Qlik normalmente re-divide o texto nessas 12 abas.
+
+   MODO PADRAO: vUseMockData = 1 -> gera base sintetica, nao precisa de nenhuma
+   conexao. Para producao, ajuste as variaveis na secao "01 - Variaveis".
+   ============================================================================= */
+
+/* =============================================================================
+   PPT - PROGRAMA POR PERFORMANCE TIROLEZ
+   Script de carga - Qlik Sense Cloud SaaS
+   -----------------------------------------------------------------------------
+   ORDEM DAS ABAS (crie uma aba no editor de carga para cada arquivo):
+
+     00 - Main             .... este arquivo (orquestracao e diretivas globais)
+     01 - Variaveis        .... pesos, degraus, janelas e variaveis de expressao
+     02 - Fontes           .... LIB CONNECT reais + gerador de base mock
+     03 - Calendario       .... DIM_DATA
+     04 - Dimensoes        .... DIM_REGIAO, DIM_EXECUTIVO, DIM_DISTRIBUIDOR,
+                                DIM_PDV, DIM_PRODUTO
+     05 - Hero Map         .... DIM_HERO (composicao por regiao)
+     06 - Fato Sell Out    .... FACT_SELL_OUT + linhas-esqueleto
+     07 - Agregado Hero    .... AGG_HERO_PDV_MES
+     08 - PPT Mensal       .... FACT_PPT_MENSAL (metas, atingimento, premiacao)
+     09 - Oportunidades    .... OPP_POSITIVACAO, OPP_HERO
+     10 - Section Access   .... controle de acesso por persona
+     99 - Finalize         .... qualidade, log e limpeza
+
+   Alternativamente, suba os .qvs em um espaco de dados e use os Must_Include
+   comentados no final desta aba.
+   ============================================================================= */
+
+// ----------------------------------------------------------------------------
+// Diretivas regionais - pt-BR
+// ----------------------------------------------------------------------------
+SET ThousandSep       = '.';
+SET DecimalSep        = ',';
+SET MoneyThousandSep  = '.';
+SET MoneyDecimalSep   = ',';
+SET MoneyFormat       = 'R$ #.##0,00;-R$ #.##0,00';
+SET TimeFormat        = 'hh:mm:ss';
+SET DateFormat        = 'DD/MM/YYYY';
+SET TimestampFormat   = 'DD/MM/YYYY hh:mm:ss';
+SET FirstWeekDay      = 0;
+SET BrokenWeeks       = 0;
+SET ReferenceDay      = 4;
+SET FirstMonthOfYear  = 1;
+SET CollationLocale   = 'pt-BR';
+SET NumericalAbbreviation = '3:k;6:M;9:G;12:T';
+SET MonthNames        = 'jan;fev;mar;abr;mai;jun;jul;ago;set;out;nov;dez';
+SET LongMonthNames    = 'janeiro;fevereiro;marco;abril;maio;junho;julho;agosto;setembro;outubro;novembro;dezembro';
+SET DayNames          = 'seg;ter;qua;qui;sex;sab;dom';
+SET LongDayNames      = 'segunda-feira;terca-feira;quarta-feira;quinta-feira;sexta-feira;sabado;domingo';
+
+// ----------------------------------------------------------------------------
+// Controle de execucao
+// ----------------------------------------------------------------------------
+LET vExecInicio     = Now();
+LET vExecID         = Text(Date(Now(), 'YYYYMMDD_hhmmss'));
+
+TRACE ================================================================;
+TRACE  PPT TIROLEZ - inicio da carga  $(vExecID);
+TRACE ================================================================;
+
+/* Para uso com arquivos externos (espaco de dados "PPT"):
+
+$(Must_Include=lib://PPT_Scripts/01-variaveis.qvs);
+$(Must_Include=lib://PPT_Scripts/02-fontes.qvs);
+$(Must_Include=lib://PPT_Scripts/03-calendario.qvs);
+$(Must_Include=lib://PPT_Scripts/04-dimensoes.qvs);
+$(Must_Include=lib://PPT_Scripts/05-hero-map.qvs);
+$(Must_Include=lib://PPT_Scripts/06-fato-sellout.qvs);
+$(Must_Include=lib://PPT_Scripts/07-agregado-hero.qvs);
+$(Must_Include=lib://PPT_Scripts/08-fato-ppt-mensal.qvs);
+$(Must_Include=lib://PPT_Scripts/09-oportunidades.qvs);
+$(Must_Include=lib://PPT_Scripts/10-section-access.qvs);
+$(Must_Include=lib://PPT_Scripts/99-finalize.qvs);
+
+*/
+
+
+/* ========================================================================== */
+
+///$tab 01 - Variaveis
+/* =============================================================================
+   VARIAVEIS DE NEGOCIO E DE CARGA
+   ============================================================================= */
+
+// ----------------------------------------------------------------------------
+// 1. Modo de execucao
+// ----------------------------------------------------------------------------
+// 1 = gera base sintetica reproduzivel (DEV / UAT / demo)
+// 0 = le das conexoes reais definidas em "02 - Fontes"
+SET vUseMockData = 1;
+
+// Escreve QVDs da camada model ao final da carga (requer espaco de dados)
+SET vGravarQVD   = 0;
+SET vPastaQVD    = 'lib://PPT_Data/model/';
+
+// Section Access: 0 desliga (uso em DEV), 1 liga (obrigatorio em PRD)
+SET vAplicarSectionAccess = 0;
+
+// ----------------------------------------------------------------------------
+// 2. Janela temporal
+// ----------------------------------------------------------------------------
+LET vDataHoje      = Today();
+LET vMesesHistorico = 18;                                     // meses carregados
+LET vDataFim       = MonthEnd('$(vDataHoje)');
+LET vDataInicio    = MonthStart(AddMonths('$(vDataHoje)', -($(vMesesHistorico)-1)));
+
+// Versoes numericas - use SEMPRE estas em expressoes de script. Comparar datas
+// como texto depende do DateFormat da sessao e quebra silenciosamente.
+LET vDataInicioNum = Num(MonthStart(AddMonths(Today(), -($(vMesesHistorico)-1))));
+LET vDataFimNum    = Num(MonthEnd(Today()));
+LET vDataHojeNum   = Num(Today());
+LET vAnoMesAtual   = Num(Year('$(vDataHoje)') * 100 + Month('$(vDataHoje)'));
+LET vAnoMesAtualTxt = Date('$(vDataHoje)', 'YYYY-MM');
+
+TRACE >> Janela de carga: $(vDataInicio) ate $(vDataFim)  |  Mes corrente: $(vAnoMesAtualTxt);
+
+// ----------------------------------------------------------------------------
+// 3. Regras do programa PPT
+// ----------------------------------------------------------------------------
+// Pesos sobre o sell-in mensal (somam 2,00%)
+SET vPesoPositivacao = 0.0070;   // 0,70%
+SET vPesoVolume      = 0.0070;   // 0,70%
+SET vPesoMixHero     = 0.0060;   // 0,60%
+SET vPesoTotal       = 0.0200;   // 2,00%
+
+// Degraus de escalonamento
+SET vDegrau1 = 0.90;   // >= 90%  -> paga 50%
+SET vDegrau2 = 0.95;   // >= 95%  -> paga 70%
+SET vDegrau3 = 1.00;   // >= 100% -> paga 100%
+
+SET vFator1  = 0.50;
+SET vFator2  = 0.70;
+SET vFator3  = 1.00;
+
+// Funcao de escalonamento. Uso: $(vFatorPremio(AtingPositivacao))
+SET vFatorPremio = If($1 >= $(vDegrau3), $(vFator3),
+                   If($1 >= $(vDegrau2), $(vFator2),
+                   If($1 >= $(vDegrau1), $(vFator1), 0)));
+
+// Proximo degrau a perseguir. Uso: $(vProximoDegrau(AtingVolume))
+SET vProximoDegrau = If($1 >= $(vDegrau3), 0,
+                     If($1 >= $(vDegrau2), $(vDegrau3),
+                     If($1 >= $(vDegrau1), $(vDegrau2), $(vDegrau1))));
+
+// Fator do proximo degrau. Uso: $(vFatorProximoDegrau(AtingVolume))
+SET vFatorProximoDegrau = If($1 >= $(vDegrau3), $(vFator3),
+                          If($1 >= $(vDegrau2), $(vFator3),
+                          If($1 >= $(vDegrau1), $(vFator2), $(vFator1))));
+
+// ----------------------------------------------------------------------------
+// 4. Regras de oportunidade
+// ----------------------------------------------------------------------------
+SET vJanelaRecenciaMeses = 3;    // "comprou nos ultimos N meses"
+SET vQuedaMinimaRecuperacao = 0.20;  // queda >= 20% vs media U3M entra no ranking
+
+// Pesos do score de prioridade de POSITIVACAO (somam 100)
+SET vScorePosPesoVolume    = 40;   // volume medio perdido (normalizado)
+SET vScorePosPesoRecencia  = 25;   // quanto mais recente a ultima compra, maior
+SET vScorePosPesoFrequencia= 20;   // em quantos dos 3 meses comprou
+SET vScorePosPesoHero      = 15;   // PDV que era Hero vale mais
+
+// Pesos do score de prioridade HERO (somam 100)
+SET vScoreHeroPesoEsforco  = 45;   // falta 1 categoria vale mais que faltar 2
+SET vScoreHeroPesoVolume   = 35;   // porte do PDV
+SET vScoreHeroPesoAfinidade= 20;   // ja comprou a categoria em algum mes anterior
+
+// Volume mensal (ton) a partir do qual um PDV e considerado "grande" no score
+// Hero. Calibrar por canal na Fase 2.
+SET vHeroVolumeNormTon = 0.5;
+
+// ----------------------------------------------------------------------------
+// 5. Parametros do gerador mock
+// ----------------------------------------------------------------------------
+SET vMockRegioes        = 6;
+SET vMockExecutivos     = 12;
+SET vMockDistribuidores = 40;
+SET vMockPDVs           = 4000;
+SET vMockSlots          = 8;      // 3 slots Hero (C1,C2,C3) + 5 slots livres
+
+// ----------------------------------------------------------------------------
+// 6. Variaveis de expressao (replicadas em qlik/master-items/variables.json)
+// ----------------------------------------------------------------------------
+SET vSetRealizado  = '{<FlagVenda={1}>}';
+
+// Ritmo necessario para fechar o mes na meta
+SET vProjecaoLinear = 'RangeSum(Sum($(vSetRealizado) VolumeTon)) / Max(DiasUteisDecorridos) * Max(DiasUteisTotais)';
+
+TRACE >> Variaveis de negocio carregadas. Peso total = $(vPesoTotal);
+
+
+/* ========================================================================== */
+
+///$tab 02 - Fontes
+/* =============================================================================
+   FONTES DE DADOS
+   -----------------------------------------------------------------------------
+   Produz as tabelas SRC_* consumidas pelas abas seguintes.
+
+   vUseMockData = 0  -> le das conexoes reais (bloco A)
+   vUseMockData = 1  -> gera base sintetica reproduzivel (bloco B)
+
+   A base mock e DETERMINISTICA: usa um hash senoidal sobre os indices, nao
+   Rand(). Duas cargas consecutivas produzem exatamente os mesmos numeros, o que
+   torna os testes de QA (docs/07-qa-checklist.md) reproduziveis.
+   ============================================================================= */
+
+// Hash pseudo-aleatorio deterministico em [0,1). Uso: $(vHash(iPdv, 12.9898))
+SET vHash = Frac(Fabs(Sin(($1) * ($2) + 78.233) * 43758.5453));
+
+
+/* =============================================================================
+   BLOCO A - FONTES REAIS
+   ============================================================================= */
+IF NOT $(vUseMockData) THEN
+
+    TRACE >> Modo PRODUCAO: lendo das conexoes corporativas;
+
+    // --- Hierarquia comercial (ERP Tirolez) -------------------------------
+    LIB CONNECT TO 'PPT_ERP_Tirolez';
+
+    SRC_REGIAO:
+    LOAD
+        Text(REGIAO_ID)                                    AS RegiaoID,
+        Text(REGIAO_NOME)                                  AS RegiaoNome,
+        Text(REGIAO_UF)                                    AS RegiaoUF,
+        // Regra de composicao Hero: SP tem composicao propria
+        If(Upper(Text(REGIAO_UF)) = 'SP', 'SP', 'DEMAIS')  AS RegiaoHero,
+        Lower(Text(COORDENADOR_EMAIL))                     AS RegiaoCoordenadorEmail
+    ;
+    SQL SELECT REGIAO_ID, REGIAO_NOME, REGIAO_UF, COORDENADOR_EMAIL FROM DW.DIM_REGIAO;
+
+    SRC_EXECUTIVO:
+    LOAD
+        Text(EXECUTIVO_ID)      AS ExecutivoID,
+        Text(EXECUTIVO_NOME)    AS ExecutivoNome,
+        Lower(Text(EMAIL))      AS ExecutivoEmail,
+        Text(CARGO)             AS ExecutivoCargo,
+        Text(REGIAO_ID)         AS RegiaoID
+    ;
+    SQL SELECT EXECUTIVO_ID, EXECUTIVO_NOME, EMAIL, CARGO, REGIAO_ID FROM DW.DIM_EXECUTIVO;
+
+    SRC_DISTRIBUIDOR:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        KeepChar(Text(CNPJ), '0123456789')                 AS DistribuidorCNPJ,
+        Text(RAZAO_SOCIAL)                                 AS DistribuidorNome,
+        Text(REGIAO_ID)                                    AS RegiaoID,
+        Text(EXECUTIVO_ID)                                 AS ExecutivoID,
+        Text(STATUS)                                       AS DistribuidorStatus,
+        Date(Floor(DT_INICIO_PPT))                         AS DistribuidorDataInicioPPT,
+        Lower(Text(EMAIL_PORTAL))                          AS DistribuidorEmailPortal
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, CNPJ, RAZAO_SOCIAL, REGIAO_ID, EXECUTIVO_ID,
+               STATUS, DT_INICIO_PPT, EMAIL_PORTAL
+        FROM DW.DIM_DISTRIBUIDOR;
+
+    SRC_PRODUTO:
+    LOAD
+        Text(COD_PRODUTO)                                  AS CodProduto,
+        Text(DESCRICAO)                                    AS ProdutoDescricao,
+        Text(CATEGORIA)                                    AS ProdutoCategoria,
+        // ATENCAO: a subcategoria e a chave da regra Hero. Qualquer divergencia
+        // de grafia quebra o Mix Hero silenciosamente. Ver 99 - Finalize.
+        Text(SUBCATEGORIA)                                 AS ProdutoSubcategoria,
+        Num(GRAMATURA)                                     AS ProdutoGramatura,
+        Num(PESO_LIQ_KG)                                   AS ProdutoPesoKg,
+        Num(UNID_POR_CAIXA)                                AS ProdutoUnidCaixa,
+        Num(PESO_LIQ_KG) * Num(UNID_POR_CAIXA)             AS ProdutoPesoCaixaKg,
+        Text(MARCA)                                        AS ProdutoMarca,
+        If(Text(STATUS) = 'A', 1, 0)                       AS FlagProdutoAtivo
+    ;
+    SQL SELECT COD_PRODUTO, DESCRICAO, CATEGORIA, SUBCATEGORIA, GRAMATURA,
+               PESO_LIQ_KG, UNID_POR_CAIXA, MARCA, STATUS
+        FROM DW.DIM_PRODUTO;
+
+    // --- Cadastro de PDV --------------------------------------------------
+    SRC_PDV:
+    LOAD
+        KeepChar(Text(CNPJ), '0123456789')                 AS CNPJ,
+        Text(RAZAO_SOCIAL)                                 AS PDVNome,
+        Text(NOME_FANTASIA)                                AS PDVFantasia,
+        Text(CANAL)                                        AS PDVCanal,
+        Text(CIDADE)                                       AS PDVCidade,
+        Text(UF)                                           AS PDVUF,
+        Num(LATITUDE)                                      AS PDVLatitude,
+        Num(LONGITUDE)                                     AS PDVLongitude,
+        Date(Floor(DT_CADASTRO))                           AS PDVDataCadastro
+    ;
+    SQL SELECT CNPJ, RAZAO_SOCIAL, NOME_FANTASIA, CANAL, CIDADE, UF,
+               LATITUDE, LONGITUDE, DT_CADASTRO
+        FROM DW.DIM_PDV;
+
+    // --- Sell Out (Mtrix / coleta NIQ) ------------------------------------
+    // Carga incremental: recarrega sempre os ultimos 3 meses (reprocessamento
+    // retroativo de distribuidor e regra, nao excecao - ver docs/01 §1.3).
+    LET vDataIncremental = Date(MonthStart(AddMonths(Today(), -3)), 'YYYY-MM-DD');
+
+    LIB CONNECT TO 'PPT_SellOut_Mtrix';
+
+    SRC_VENDA:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        KeepChar(Text(CNPJ_PDV), '0123456789')             AS CNPJ,
+        Text(COD_PRODUTO)                                  AS CodProduto,
+        Date(Floor(DT_EMISSAO))                            AS Data,
+        Num(QTD_CAIXAS)                                    AS QtdCaixas,
+        Num(VALOR_LIQUIDO)                                 AS ValorSellOut,
+        Text(NUM_DOCUMENTO)                                AS NumeroDocumento
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, CNPJ_PDV, COD_PRODUTO, DT_EMISSAO,
+               QTD_CAIXAS, VALOR_LIQUIDO, NUM_DOCUMENTO
+        FROM STG.FATO_SELL_OUT
+       WHERE DT_EMISSAO >= '$(vDataIncremental)';
+
+    // Historico consolidado dos meses ja fechados
+    CONCATENATE (SRC_VENDA)
+    LOAD
+        DistribuidorID, CNPJ, CodProduto, Data,
+        QtdCaixas, ValorSellOut, NumeroDocumento
+    FROM [$(vPastaQVD)SRC_VENDA_HIST.qvd] (qvd)
+    WHERE Data < '$(vDataIncremental)';
+
+    // --- Metas PPT e Sell-In ----------------------------------------------
+    SRC_META:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        Date(MonthStart(Floor(DT_COMPETENCIA)), 'YYYY-MM') AS AnoMes,
+        Num(META_POSITIVACAO)                              AS MetaPositivacao,
+        Num(META_VOLUME_TON)                               AS MetaVolumeTon,
+        Num(META_MIX_HERO)                                 AS MetaMixHero
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, DT_COMPETENCIA, META_POSITIVACAO,
+               META_VOLUME_TON, META_MIX_HERO
+        FROM DW.FATO_META_PPT;
+
+    SRC_SELLIN:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        Date(MonthStart(Floor(DT_COMPETENCIA)), 'YYYY-MM') AS AnoMes,
+        Num(VALOR_SELL_IN)                                 AS SellInValor,
+        If(Num(FLAG_FECHADO) = 1, 1, 0)                    AS FlagMesFechado
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, DT_COMPETENCIA, VALOR_SELL_IN, FLAG_FECHADO
+        FROM DW.FATO_SELL_IN;
+
+END IF;
+
+
+/* =============================================================================
+   BLOCO B - BASE MOCK DETERMINISTICA
+   ============================================================================= */
+IF $(vUseMockData) THEN
+
+    TRACE >> Modo MOCK: gerando base sintetica deterministica;
+
+    // -------------------------------------------------------------------------
+    // B1. Regioes
+    // -------------------------------------------------------------------------
+    SRC_REGIAO:
+    LOAD * INLINE [
+RegiaoID, RegiaoNome, RegiaoUF, RegiaoHero, RegiaoCoordenadorEmail
+1, Sao Paulo, SP, SP, coord.sp@tirolez.com.br
+2, Sul, PR, DEMAIS, coord.sul@tirolez.com.br
+3, Sudeste, MG, DEMAIS, coord.sudeste@tirolez.com.br
+4, Centro-Oeste, GO, DEMAIS, coord.co@tirolez.com.br
+5, Nordeste, PE, DEMAIS, coord.ne@tirolez.com.br
+6, Norte, PA, DEMAIS, coord.norte@tirolez.com.br
+];
+
+    // -------------------------------------------------------------------------
+    // B2. Cidades (5 por regiao) - usadas no mapa da Tela 6
+    // -------------------------------------------------------------------------
+    MOCK_CIDADE:
+    LOAD
+        Text(RegiaoID) & '|' & Text(CidadeSeq) AS %MockCidadeKey,
+        Cidade, UF, Lat, Lon
+    INLINE [
+RegiaoID, CidadeSeq, Cidade, UF, Lat, Lon
+1, 1, Sao Paulo, SP, -23.5505, -46.6333
+1, 2, Campinas, SP, -22.9056, -47.0608
+1, 3, Ribeirao Preto, SP, -21.1775, -47.8103
+1, 4, Santos, SP, -23.9608, -46.3336
+1, 5, Sorocaba, SP, -23.5015, -47.4526
+2, 1, Curitiba, PR, -25.4284, -49.2733
+2, 2, Porto Alegre, RS, -30.0346, -51.2177
+2, 3, Florianopolis, SC, -27.5954, -48.5480
+2, 4, Londrina, PR, -23.3103, -51.1628
+2, 5, Caxias do Sul, RS, -29.1678, -51.1794
+3, 1, Belo Horizonte, MG, -19.9167, -43.9345
+3, 2, Rio de Janeiro, RJ, -22.9068, -43.1729
+3, 3, Vitoria, ES, -20.3155, -40.3128
+3, 4, Uberlandia, MG, -18.9186, -48.2772
+3, 5, Juiz de Fora, MG, -21.7642, -43.3496
+4, 1, Goiania, GO, -16.6869, -49.2648
+4, 2, Brasilia, DF, -15.7939, -47.8828
+4, 3, Campo Grande, MS, -20.4697, -54.6201
+4, 4, Cuiaba, MT, -15.6014, -56.0979
+4, 5, Anapolis, GO, -16.3267, -48.9528
+5, 1, Recife, PE, -8.0476, -34.8770
+5, 2, Salvador, BA, -12.9777, -38.5016
+5, 3, Fortaleza, CE, -3.7319, -38.5267
+5, 4, Natal, RN, -5.7945, -35.2110
+5, 5, Sao Luis, MA, -2.5307, -44.3068
+6, 1, Belem, PA, -1.4558, -48.5044
+6, 2, Manaus, AM, -3.1190, -60.0217
+6, 3, Porto Velho, RO, -8.7619, -63.9039
+6, 4, Palmas, TO, -10.1849, -48.3336
+6, 5, Rio Branco, AC, -9.9754, -67.8249
+];
+
+    MAP_CIDADE_NOME: MAPPING LOAD %MockCidadeKey, Cidade RESIDENT MOCK_CIDADE;
+    MAP_CIDADE_UF:   MAPPING LOAD %MockCidadeKey, UF     RESIDENT MOCK_CIDADE;
+    MAP_CIDADE_LAT:  MAPPING LOAD %MockCidadeKey, Lat    RESIDENT MOCK_CIDADE;
+    MAP_CIDADE_LON:  MAPPING LOAD %MockCidadeKey, Lon    RESIDENT MOCK_CIDADE;
+
+    // -------------------------------------------------------------------------
+    // B3. Produtos - o catalogo real que sustenta a regra Hero
+    //     PoolHero: C1 / C2 / C3SP / C3DEM / OUTROS (usado apenas pelo gerador)
+    // -------------------------------------------------------------------------
+    SRC_PRODUTO_TMP:
+    LOAD * INLINE [
+CodProduto, ProdutoDescricao, ProdutoCategoria, ProdutoSubcategoria, ProdutoGramatura, ProdutoUnidCaixa, PrecoKg, PoolHero, PoolSeq
+TZ-CR-200,  Creme de Ricota Tradicional 200g, Ricota,    Creme Ricota,        200,  24, 34.90, C1, 1
+TZ-CR-400,  Creme de Ricota Tradicional 400g, Ricota,    Creme Ricota,        400,  12, 32.50, C1, 2
+TZ-CRL-200, Creme de Ricota Light 200g,       Ricota,    Creme Ricota Light,  200,  24, 37.90, C1, 3
+TZ-CRL-400, Creme de Ricota Light 400g,       Ricota,    Creme Ricota Light,  400,  12, 35.40, C1, 4
+TZ-RQ-200,  Requeijao Cremoso 200g,           Requeijao, Requeijao,           200,  24, 39.90, C2, 1
+TZ-RQ-400,  Requeijao Cremoso 400g,           Requeijao, Requeijao,           400,  12, 36.80, C2, 2
+TZ-RQ-1800, Requeijao Cremoso Balde 1.8kg,    Requeijao, Requeijao,           1800,  4, 29.90, C2, 3
+TZ-RQL-200, Requeijao Light 200g,             Requeijao, Requeijao Light,     200,  24, 42.50, C2, 4
+TZ-RQL-400, Requeijao Light 400g,             Requeijao, Requeijao Light,     400,  12, 39.20, C2, 5
+TZ-MUF-150, Mussarela Fatiada 150g,           Fatiados,  Mussarela Fatiada,   150,  20, 48.90, C3SP, 1
+TZ-MUF-300, Mussarela Fatiada 300g,           Fatiados,  Mussarela Fatiada,   300,  12, 46.20, C3SP, 2
+TZ-MUL-150, Mussarela Light Fatiada 150g,     Fatiados,  Mussarela Light,     150,  20, 52.40, C3SP, 3
+TZ-PRF-150, Prato Fatiado 150g,               Fatiados,  Prato Fatiado,       150,  20, 47.60, C3SP, 4
+TZ-PRF-300, Prato Fatiado 300g,               Fatiados,  Prato Fatiado,       300,  12, 45.10, C3SP, 5
+TZ-PRL-150, Prato Light Fatiado 150g,         Fatiados,  Prato Light,         150,  20, 51.80, C3SP, 6
+TZ-MTC-200, Manteiga Com Sal 200g,            Manteiga,  Manteiga Com Sal,    200,  24, 62.90, C3DEM, 1
+TZ-MTC-500, Manteiga Com Sal 500g,            Manteiga,  Manteiga Com Sal,    500,  12, 58.40, C3DEM, 2
+TZ-MTS-200, Manteiga Sem Sal 200g,            Manteiga,  Manteiga Sem Sal,    200,  24, 64.20, C3DEM, 3
+TZ-MTS-500, Manteiga Sem Sal 500g,            Manteiga,  Manteiga Sem Sal,    500,  12, 59.80, C3DEM, 4
+TZ-MUP-3000,Mussarela Peca 3kg,               Queijos,   Mussarela Peca,      3000,  4, 41.50, OUTROS, 1
+TZ-PRP-3000,Prato Peca 3kg,                   Queijos,   Prato Peca,          3000,  4, 40.20, OUTROS, 2
+TZ-QCO-500, Queijo Coalho 500g,               Queijos,   Queijo Coalho,       500,  12, 44.70, OUTROS, 3
+TZ-PRV-500, Provolone 500g,                   Queijos,   Provolone,           500,  12, 55.30, OUTROS, 4
+TZ-PAR-100, Parmesao Ralado 100g,             Queijos,   Parmesao Ralado,     100,  36, 72.90, OUTROS, 5
+TZ-MIN-500, Minas Frescal 500g,               Queijos,   Minas Frescal,       500,  12, 38.60, OUTROS, 6
+TZ-COT-200, Cottage 200g,                     Queijos,   Cottage,             200,  24, 43.80, OUTROS, 7
+TZ-CHE-150, Cheddar Fatiado 150g,             Fatiados,  Cheddar Fatiado,     150,  20, 49.90, OUTROS, 8
+];
+
+    SRC_PRODUTO:
+    LOAD
+        CodProduto,
+        ProdutoDescricao,
+        ProdutoCategoria,
+        ProdutoSubcategoria,
+        ProdutoGramatura,
+        ProdutoUnidCaixa,
+        ProdutoGramatura / 1000                            AS ProdutoPesoKg,
+        ProdutoGramatura * ProdutoUnidCaixa / 1000         AS ProdutoPesoCaixaKg,
+        PrecoKg,
+        'Tirolez'                                          AS ProdutoMarca,
+        1                                                  AS FlagProdutoAtivo
+    RESIDENT SRC_PRODUTO_TMP;
+
+    MAP_POOL_PRODUTO:
+    MAPPING LOAD PoolHero & '|' & PoolSeq, CodProduto RESIDENT SRC_PRODUTO_TMP;
+
+    MAP_PRODUTO_PESOCX:
+    MAPPING LOAD CodProduto, ProdutoGramatura * ProdutoUnidCaixa / 1000 RESIDENT SRC_PRODUTO_TMP;
+
+    MAP_PRODUTO_PRECO:
+    MAPPING LOAD CodProduto, PrecoKg RESIDENT SRC_PRODUTO_TMP;
+
+    DROP TABLE SRC_PRODUTO_TMP;
+
+    // Tamanho de cada pool - usado para sortear SKU dentro do pool
+    SET vPoolC1    = 4;
+    SET vPoolC2    = 5;
+    SET vPoolC3SP  = 6;
+    SET vPoolC3DEM = 4;
+    SET vPoolOUT   = 8;
+
+    // -------------------------------------------------------------------------
+    // B4. Executivos e Distribuidores
+    // -------------------------------------------------------------------------
+    SRC_EXECUTIVO:
+    LOAD
+        Text('EXE' & Num(RecNo(), '000'))                       AS ExecutivoID,
+        'Executivo ' & Num(RecNo(), '00')                       AS ExecutivoNome,
+        'executivo' & Num(RecNo(), '00') & '@tirolez.com.br'    AS ExecutivoEmail,
+        'Executivo de Contas'                                   AS ExecutivoCargo,
+        Text(Mod(RecNo() - 1, $(vMockRegioes)) + 1)             AS RegiaoID
+    AUTOGENERATE $(vMockExecutivos);
+
+    SRC_DISTRIBUIDOR:
+    LOAD
+        DistribuidorID,
+        DistribuidorCNPJ,
+        DistribuidorNome,
+        RegiaoID,
+        ExecutivoID,
+        DistribuidorStatus,
+        DistribuidorDataInicioPPT,
+        Lower(Replace(DistribuidorNome, ' ', '.')) & '@distribuidor.com.br' AS DistribuidorEmailPortal
+    ;
+    LOAD
+        Text('D' & Num(RecNo(), '000'))                                   AS DistribuidorID,
+        Text(Num(30000000 + RecNo() * 13, '00000000')) & '0001'
+            & Text(Num(Mod(RecNo() * 17, 90) + 10, '00'))                 AS DistribuidorCNPJ,
+        'Distribuidora ' & Num(RecNo(), '00')                             AS DistribuidorNome,
+        Text(Mod(RecNo() - 1, $(vMockRegioes)) + 1)                       AS RegiaoID,
+        Text('EXE' & Num(Mod(RecNo() - 1, $(vMockExecutivos)) + 1, '000')) AS ExecutivoID,
+        If($(vHash(RecNo(), 5.11)) < 0.93, 'Ativo', 'Suspenso')           AS DistribuidorStatus,
+        Date(AddMonths($(vDataInicioNum), -Floor($(vHash(RecNo(), 9.71)) * 24))) AS DistribuidorDataInicioPPT
+    AUTOGENERATE $(vMockDistribuidores);
+
+    MAP_DIST_REGIAO:  MAPPING LOAD DistribuidorID, RegiaoID RESIDENT SRC_DISTRIBUIDOR;
+
+    MAP_REGIAO_HERO:  MAPPING LOAD RegiaoID, RegiaoHero RESIDENT SRC_REGIAO;
+
+    // -------------------------------------------------------------------------
+    // B5. PDVs
+    //     Cada PDV pertence a um distribuidor (carteira) e a uma cidade da
+    //     regiao desse distribuidor. "qPdv" e o indice de qualidade do PDV
+    //     (0..1): controla frequencia de compra, porte e propensao Hero.
+    // -------------------------------------------------------------------------
+    SRC_PDV_TMP:
+    LOAD
+        iPdv,
+        qPdv,
+        DistribuidorID,
+        RegiaoID,
+        ApplyMap('MAP_REGIAO_HERO', RegiaoID, 'DEMAIS')                    AS RegiaoHero,
+        Text(Num(20000000 + iPdv * 7, '00000000')) & '0001'
+            & Text(Num(Mod(iPdv * 31, 90) + 10, '00'))                     AS CNPJ,
+        RegiaoID & '|' & (Floor($(vHash(iPdv, 3.31)) * 5) + 1)             AS %MockCidadeKey,
+        Pick(Floor($(vHash(iPdv, 6.13)) * 4) + 1,
+             'Varejo Tradicional', 'Varejo Tradicional',
+             'Padaria e Conveniencia', 'Atacado e Food Service')           AS PDVCanal
+    ;
+    LOAD
+        RecNo()                                                            AS iPdv,
+        $(vHash(RecNo(), 1.17))                                            AS qPdv,
+        Text('D' & Num(Floor($(vHash(RecNo(), 2.71)) * $(vMockDistribuidores)) + 1, '000')) AS DistribuidorID,
+        ApplyMap('MAP_DIST_REGIAO',
+                 Text('D' & Num(Floor($(vHash(RecNo(), 2.71)) * $(vMockDistribuidores)) + 1, '000')), '1') AS RegiaoID
+    AUTOGENERATE $(vMockPDVs);
+
+    SRC_PDV:
+    LOAD
+        CNPJ,
+        'Comercio de Alimentos ' & Num(iPdv, '0000') & ' Ltda'             AS PDVNome,
+        Pick(Mod(iPdv, 8) + 1,
+             'Mercado', 'Supermercado', 'Emporio', 'Mercearia',
+             'Padaria', 'Minimercado', 'Adega', 'Casa de Frios')
+            & ' ' & Pick(Mod(Floor(iPdv / 8), 10) + 1,
+             'Sao Jorge', 'Boa Vista', 'Central', 'do Bairro', 'Progresso',
+             'Estrela', 'Uniao', 'Popular', 'Familia', 'Bom Preco')        AS PDVFantasia,
+        PDVCanal,
+        ApplyMap('MAP_CIDADE_NOME', %MockCidadeKey, 'Nao informado')       AS PDVCidade,
+        ApplyMap('MAP_CIDADE_UF',   %MockCidadeKey, 'ND')                  AS PDVUF,
+        // dispersao de ate ~0.15 grau para o mapa nao virar um unico ponto
+        Num(ApplyMap('MAP_CIDADE_LAT', %MockCidadeKey, 0)) + ($(vHash(iPdv, 7.77)) - 0.5) * 0.3 AS PDVLatitude,
+        Num(ApplyMap('MAP_CIDADE_LON', %MockCidadeKey, 0)) + ($(vHash(iPdv, 8.88)) - 0.5) * 0.3 AS PDVLongitude,
+        Date(AddMonths($(vDataInicioNum), -Floor($(vHash(iPdv, 4.44)) * 36))) AS PDVDataCadastro
+    RESIDENT SRC_PDV_TMP;
+
+    // Mapas usados pelo gerador de vendas
+    MAP_PDV_DIST:    MAPPING LOAD iPdv, DistribuidorID RESIDENT SRC_PDV_TMP;
+    MAP_PDV_CNPJ:    MAPPING LOAD iPdv, CNPJ           RESIDENT SRC_PDV_TMP;
+    MAP_PDV_HERO:    MAPPING LOAD iPdv, RegiaoHero     RESIDENT SRC_PDV_TMP;
+    MAP_PDV_Q:       MAPPING LOAD iPdv, qPdv           RESIDENT SRC_PDV_TMP;
+
+    DROP TABLE SRC_PDV_TMP;
+
+    // -------------------------------------------------------------------------
+    // B6. Sell Out
+    //     Grade completa PDV x Mes x Slot; cada linha sobrevive conforme a
+    //     probabilidade do slot. Slots 1..3 sao os slots Hero (C1, C2, C3 da
+    //     regiao); slot 6 e a categoria C3 da OUTRA regiao - compra real que
+    //     NAO conta para o Hero local (caso de teste proposital).
+    // -------------------------------------------------------------------------
+    LET vMockLinhas = $(vMockPDVs) * $(vMesesHistorico) * $(vMockSlots);
+    LET vDiaHoje    = Day('$(vDataHoje)');
+
+    TRACE >> Gerando ate $(vMockLinhas) linhas candidatas de sell out;
+
+    SRC_VENDA:
+    LOAD
+        DistribuidorID,
+        CNPJ,
+        CodProduto,
+        Data,
+        QtdCaixas,
+        Round(QtdCaixas * ApplyMap('MAP_PRODUTO_PESOCX', CodProduto, 1)
+              * ApplyMap('MAP_PRODUTO_PRECO', CodProduto, 40), 0.01)       AS ValorSellOut,
+        'NF' & Num(iPdv, '00000') & Num(iMes, '00') & Num(iSlot, '0')      AS NumeroDocumento
+    WHERE QtdCaixas > 0 AND Len(CodProduto) > 0;
+    LOAD
+        iPdv, iMes, iSlot, Data,
+        ApplyMap('MAP_PDV_DIST', iPdv, 'D001')                             AS DistribuidorID,
+        ApplyMap('MAP_PDV_CNPJ', iPdv, '')                                 AS CNPJ,
+        CodProduto,
+        // Porte: PDVs melhores compram mais caixas
+        Ceil((1 + $(vHash(iPdv * 1000 + iMes * 13 + iSlot, 11.31)) * 6) * (0.5 + qPdv * 2.5)) AS QtdCaixas
+    ;
+    LOAD
+        *,
+        // Sorteio do SKU dentro do pool do slot
+        ApplyMap('MAP_POOL_PRODUTO',
+            Pool & '|' & (Floor($(vHash(iPdv * 977 + iMes * 41 + iSlot, 13.77))
+                                * Pick(Match(Pool, 'C1', 'C2', 'C3SP', 'C3DEM', 'OUTROS'),
+                                       $(vPoolC1), $(vPoolC2), $(vPoolC3SP), $(vPoolC3DEM), $(vPoolOUT)))
+                          + 1),
+            '')                                                            AS CodProduto
+    ;
+    LOAD
+        *,
+        // Pool de produtos de cada slot
+        If(iSlot = 1, 'C1',
+        If(iSlot = 2, 'C2',
+        If(iSlot = 3, If(RegiaoHero = 'SP', 'C3SP', 'C3DEM'),
+        If(iSlot = 6, If(RegiaoHero = 'SP', 'C3DEM', 'C3SP'),
+           'OUTROS'))))                                                    AS Pool
+    WHERE Sobrevive = 1;
+    LOAD
+        *,
+        If(Ativo = 0, 0,
+        If(iSlot = 1, If($(vHash(iPdv * 31 + iMes * 7 + 101, 17.19)) < (0.35 + qPdv * 0.45), 1, 0),
+        If(iSlot = 2, If($(vHash(iPdv * 31 + iMes * 7 + 202, 19.23)) < (0.45 + qPdv * 0.45), 1, 0),
+        If(iSlot = 3, If($(vHash(iPdv * 31 + iMes * 7 + 303, 23.29)) < (0.30 + qPdv * 0.50), 1, 0),
+           If($(vHash(iPdv * 31 + iMes * 7 + iSlot * 97, 29.31)) < (0.55 - (iSlot - 4) * 0.09), 1, 0)
+        ))))                                                               AS Sobrevive
+    ;
+    LOAD
+        *,
+        // O PDV comprou algo neste mes?
+        If($(vHash(iPdv * 137 + iMes * 61, 31.41)) < (0.55 + qPdv * 0.40), 1, 0) AS Ativo,
+        Date(MonthStart(AddMonths($(vDataInicioNum), iMes - 1))
+             + Floor($(vHash(iPdv * 53 + iMes * 29 + iSlot, 37.51)) * 27))      AS Data
+    ;
+    LOAD
+        Floor((RecNo() - 1) / ($(vMesesHistorico) * $(vMockSlots))) + 1     AS iPdv,
+        Floor(Mod(RecNo() - 1, $(vMesesHistorico) * $(vMockSlots)) / $(vMockSlots)) + 1 AS iMes,
+        Mod(RecNo() - 1, $(vMockSlots)) + 1                                 AS iSlot,
+        ApplyMap('MAP_PDV_Q',    Floor((RecNo() - 1) / ($(vMesesHistorico) * $(vMockSlots))) + 1, 0.5) AS qPdv,
+        ApplyMap('MAP_PDV_HERO', Floor((RecNo() - 1) / ($(vMesesHistorico) * $(vMockSlots))) + 1, 'DEMAIS') AS RegiaoHero
+    AUTOGENERATE $(vMockLinhas);
+
+    // O mes corrente e parcial: descarta o que "aconteceria" depois de hoje.
+    // E isso que da sentido a projecao de fechamento e ao gap acionavel.
+    SRC_VENDA_FINAL:
+    NOCONCATENATE
+    LOAD *
+    RESIDENT SRC_VENDA
+    WHERE Num(Data) <= $(vDataFimNum)
+      AND (Num(Year(Data) * 100 + Month(Data)) < $(vAnoMesAtual) OR Day(Data) <= $(vDiaHoje));
+
+    DROP TABLE SRC_VENDA;
+    RENAME TABLE SRC_VENDA_FINAL TO SRC_VENDA;
+
+    LET vQtdLinhasVenda = NoOfRows('SRC_VENDA');
+    TRACE >> SRC_VENDA gerada com $(vQtdLinhasVenda) linhas;
+
+    DROP TABLE MOCK_CIDADE;
+
+END IF;
+
+
+/* ========================================================================== */
+
+///$tab 03 - Calendario
+/* =============================================================================
+   DIM_DATA
+   -----------------------------------------------------------------------------
+   Alem do calendario padrao, entrega os campos que sustentam a PROJECAO de
+   fechamento do mes (DiasUteisDecorridos / DiasUteisTotais). Sem eles, dizer
+   "voce vai fechar em 87% da meta" no dia 12 e chute.
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// Feriados nacionais - impactam o ritmo de venda do canal indireto
+// -----------------------------------------------------------------------------
+FERIADO:
+LOAD Num(Date#(DataFeriado, 'DD/MM/YYYY')) AS %Feriado INLINE [
+DataFeriado
+01/01/2025
+03/03/2025
+04/03/2025
+18/04/2025
+21/04/2025
+01/05/2025
+19/06/2025
+07/09/2025
+12/10/2025
+02/11/2025
+15/11/2025
+20/11/2025
+25/12/2025
+01/01/2026
+16/02/2026
+17/02/2026
+03/04/2026
+21/04/2026
+01/05/2026
+04/06/2026
+07/09/2026
+12/10/2026
+02/11/2026
+15/11/2026
+20/11/2026
+25/12/2026
+];
+
+MAP_FERIADO: MAPPING LOAD %Feriado, 1 RESIDENT FERIADO;
+DROP TABLE FERIADO;
+
+// -----------------------------------------------------------------------------
+// Grade diaria
+// -----------------------------------------------------------------------------
+TMP_CALENDARIO:
+LOAD
+    Data,
+    // Dia util = seg a sex e nao feriado
+    If(Match(WeekDay(Data), 'sab', 'dom') = 0
+       AND ApplyMap('MAP_FERIADO', Num(Data), 0) = 0, 1, 0) AS FlagDiaUtil
+;
+LOAD
+    Date($(vDataInicioNum) + RecNo() - 1) AS Data
+AUTOGENERATE $(vDataFimNum) - $(vDataInicioNum) + 1;
+
+// Dias uteis totais e decorridos por mes
+DIAS_UTEIS_MES:
+LOAD
+    AnoMesNum,
+    Sum(FlagDiaUtil)        AS DiasUteisTotais,
+    Sum(DiaUtilDecorrido)   AS DiasUteisDecorridos,
+    Count(Data)             AS DiasNoMes
+GROUP BY AnoMesNum;
+LOAD
+    Num(Year(Data) * 100 + Month(Data))                  AS AnoMesNum,
+    Data,
+    FlagDiaUtil,
+    If(Num(Data) <= $(vDataHojeNum), FlagDiaUtil, 0)      AS DiaUtilDecorrido
+RESIDENT TMP_CALENDARIO;
+
+MAP_DU_TOTAIS:    MAPPING LOAD AnoMesNum, DiasUteisTotais     RESIDENT DIAS_UTEIS_MES;
+MAP_DU_DECORRIDOS:MAPPING LOAD AnoMesNum, DiasUteisDecorridos RESIDENT DIAS_UTEIS_MES;
+MAP_DIAS_MES:     MAPPING LOAD AnoMesNum, DiasNoMes           RESIDENT DIAS_UTEIS_MES;
+
+DROP TABLE DIAS_UTEIS_MES;
+
+// -----------------------------------------------------------------------------
+// DIM_DATA final
+// -----------------------------------------------------------------------------
+DIM_DATA:
+LOAD
+    Num(Data)                                            AS %ChaveData,
+    Data,
+    Year(Data)                                           AS Ano,
+    Month(Data)                                          AS Mes,
+    Text(Month(Data))                                    AS NomeMes,
+    Date(MonthStart(Data), 'YYYY-MM')                    AS AnoMes,
+    Date(MonthStart(Data), 'MMM/YY')                     AS AnoMesLabel,
+    Num(Year(Data) * 100 + Month(Data))                  AS AnoMesNum,
+    'T' & Ceil(Month(Data) / 3)                          AS Trimestre,
+    Day(Data)                                            AS DiaDoMes,
+    WeekDay(Data)                                        AS DiaSemana,
+    FlagDiaUtil,
+    ApplyMap('MAP_DIAS_MES',      Num(Year(Data) * 100 + Month(Data)), 30) AS DiasNoMes,
+    ApplyMap('MAP_DU_TOTAIS',     Num(Year(Data) * 100 + Month(Data)), 21) AS DiasUteisTotais,
+    ApplyMap('MAP_DU_DECORRIDOS', Num(Year(Data) * 100 + Month(Data)), 21) AS DiasUteisDecorridos,
+    If(Num(Year(Data) * 100 + Month(Data)) = $(vAnoMesAtual), 1, 0)        AS FlagMesAtual,
+    // Mes fechado = anterior ao corrente. Mes corrente nunca e fechado.
+    If(Num(Year(Data) * 100 + Month(Data)) < $(vAnoMesAtual), 1, 0)        AS FlagMesFechadoData,
+    // Deslocamento em meses em relacao ao mes corrente (0 = atual, -1 = anterior)
+    (Year(Data) * 12 + Month(Data))
+        - (Year('$(vDataHoje)') * 12 + Month('$(vDataHoje)'))              AS OffsetMes
+RESIDENT TMP_CALENDARIO;
+
+DROP TABLE TMP_CALENDARIO;
+
+LET vQtdDatas = NoOfRows('DIM_DATA');
+TRACE >> DIM_DATA carregada com $(vQtdDatas) dias;
+
+
+/* ========================================================================== */
+
+///$tab 04 - Dimensoes
+/* =============================================================================
+   DIMENSOES DO MODELO ESTRELA
+   DIM_REGIAO | DIM_EXECUTIVO | DIM_DISTRIBUIDOR | DIM_PDV | DIM_PRODUTO
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// DIM_REGIAO
+// -----------------------------------------------------------------------------
+DIM_REGIAO:
+LOAD
+    AutoNumberHash128(RegiaoID)  AS %ChaveRegiao,
+    RegiaoID,
+    RegiaoNome,
+    RegiaoUF,
+    // 'SP' ou 'DEMAIS' - define qual composicao Hero se aplica
+    RegiaoHero,
+    If(RegiaoHero = 'SP', 'Cat 3 = Fatiados', 'Cat 3 = Manteiga') AS RegiaoHeroDescricao,
+    Lower(RegiaoCoordenadorEmail) AS RegiaoCoordenadorEmail
+RESIDENT SRC_REGIAO;
+
+MAP_REGIAO_HERO_FINAL: MAPPING LOAD RegiaoID, RegiaoHero RESIDENT DIM_REGIAO;
+MAP_REGIAO_NOME:       MAPPING LOAD RegiaoID, RegiaoNome RESIDENT DIM_REGIAO;
+
+DROP TABLE SRC_REGIAO;
+
+// -----------------------------------------------------------------------------
+// DIM_EXECUTIVO
+// -----------------------------------------------------------------------------
+DIM_EXECUTIVO:
+LOAD
+    AutoNumberHash128(ExecutivoID) AS %ChaveExecutivo,
+    ExecutivoID,
+    ExecutivoNome,
+    Lower(ExecutivoEmail)          AS ExecutivoEmail,
+    ExecutivoCargo,
+    ApplyMap('MAP_REGIAO_NOME', RegiaoID, 'Nao informada') AS ExecutivoRegiaoNome
+RESIDENT SRC_EXECUTIVO;
+
+DROP TABLE SRC_EXECUTIVO;
+
+// -----------------------------------------------------------------------------
+// DIM_DISTRIBUIDOR
+// -----------------------------------------------------------------------------
+DIM_DISTRIBUIDOR:
+LOAD
+    AutoNumberHash128(DistribuidorID)                    AS %ChaveDistribuidor,
+    DistribuidorID,
+    DistribuidorCNPJ,
+    Left(DistribuidorCNPJ, 2) & '.' & Mid(DistribuidorCNPJ, 3, 3) & '.'
+        & Mid(DistribuidorCNPJ, 6, 3) & '/' & Mid(DistribuidorCNPJ, 9, 4)
+        & '-' & Right(DistribuidorCNPJ, 2)               AS DistribuidorCNPJFormatado,
+    DistribuidorNome,
+    AutoNumberHash128(RegiaoID)                          AS %ChaveRegiao,
+    AutoNumberHash128(ExecutivoID)                       AS %ChaveExecutivo,
+    DistribuidorStatus,
+    DistribuidorDataInicioPPT,
+    Lower(DistribuidorEmailPortal)                       AS DistribuidorEmailPortal,
+    // Elegibilidade ao PPT: precisa estar ativo e ter iniciado o programa
+    If(DistribuidorStatus = 'Ativo', 1, 0)               AS FlagDistribuidorElegivel,
+    // Composicao Hero herdada da regiao - fica no distribuidor porque e ele
+    // quem determina qual regra vale para as vendas dele
+    ApplyMap('MAP_REGIAO_HERO_FINAL', RegiaoID, 'DEMAIS') AS DistribuidorRegiaoHero
+RESIDENT SRC_DISTRIBUIDOR;
+
+// Mapas para derivar a chave Hero na tabela fato
+MAP_DIST_REGIAOHERO: MAPPING LOAD DistribuidorID, DistribuidorRegiaoHero RESIDENT DIM_DISTRIBUIDOR;
+MAP_DIST_NOME:       MAPPING LOAD DistribuidorID, DistribuidorNome       RESIDENT DIM_DISTRIBUIDOR;
+
+DROP TABLE SRC_DISTRIBUIDOR;
+
+// -----------------------------------------------------------------------------
+// DIM_PDV
+// A chave de negocio da positivacao e o CNPJ - 14 digitos, sem mascara.
+// Qualquer sujeira aqui infla ou desinfla o KPI que paga o distribuidor.
+// -----------------------------------------------------------------------------
+DIM_PDV:
+LOAD
+    AutoNumberHash128(CNPJ)                              AS %ChavePDV,
+    CNPJ,
+    Left(CNPJ, 2) & '.' & Mid(CNPJ, 3, 3) & '.' & Mid(CNPJ, 6, 3)
+        & '/' & Mid(CNPJ, 9, 4) & '-' & Right(CNPJ, 2)   AS CNPJFormatado,
+    PDVNome,
+    PDVFantasia,
+    PDVCanal,
+    PDVCidade,
+    PDVUF,
+    PDVLatitude,
+    PDVLongitude,
+    PDVDataCadastro
+RESIDENT SRC_PDV
+// Len = 14 descarta CNPJ sujo; NOT Exists(CNPJ) garante 1 linha por CNPJ.
+// Sem a deduplicacao, um PDV cadastrado duas vezes conta duas positivacoes.
+WHERE Len(Trim(CNPJ)) = 14 AND NOT Exists(CNPJ);
+
+// Log de qualidade - ilha proposital, consumida no painel de auditoria.
+// Criada sempre com uma linha semente para que os CONCATENATE das abas
+// seguintes nunca falhem quando nao houver rejeicao.
+QA_REJEITADOS:
+LOAD * INLINE [
+QA_Tabela, QA_Motivo, QA_Valor, QA_Ocorrencias
+CARGA, Execucao iniciada sem rejeicoes, -, 0
+];
+
+CONCATENATE (QA_REJEITADOS)
+LOAD
+    'DIM_PDV'                                            AS QA_Tabela,
+    'CNPJ invalido (tamanho diferente de 14)'            AS QA_Motivo,
+    CNPJ                                                 AS QA_Valor,
+    Count(CNPJ)                                          AS QA_Ocorrencias
+RESIDENT SRC_PDV
+WHERE Len(Trim(CNPJ)) <> 14
+GROUP BY CNPJ;
+
+DROP TABLE SRC_PDV;
+
+MAP_PDV_FANTASIA:    MAPPING LOAD CNPJ, PDVFantasia   RESIDENT DIM_PDV;
+MAP_PDV_CANAL:       MAPPING LOAD CNPJ, PDVCanal      RESIDENT DIM_PDV;
+MAP_PDV_CIDADE:      MAPPING LOAD CNPJ, PDVCidade     RESIDENT DIM_PDV;
+MAP_PDVKEY_CANAL:    MAPPING LOAD %ChavePDV, PDVCanal RESIDENT DIM_PDV;
+
+// -----------------------------------------------------------------------------
+// DIM_PRODUTO
+// -----------------------------------------------------------------------------
+DIM_PRODUTO:
+LOAD
+    AutoNumberHash128(CodProduto)                        AS %ChaveProduto,
+    CodProduto,
+    ProdutoDescricao,
+    ProdutoCategoria,
+    // Normalizada: e a chave que casa com a composicao Hero
+    Capitalize(Trim(ProdutoSubcategoria))                AS ProdutoSubcategoria,
+    ProdutoGramatura,
+    ProdutoGramatura & 'g'                               AS ProdutoGramaturaLabel,
+    ProdutoUnidCaixa,
+    ProdutoPesoKg,
+    ProdutoPesoCaixaKg,
+    ProdutoMarca,
+    FlagProdutoAtivo
+RESIDENT SRC_PRODUTO;
+
+MAP_PRODUTO_SUBCAT: MAPPING LOAD CodProduto, Capitalize(Trim(ProdutoSubcategoria)) RESIDENT SRC_PRODUTO;
+MAP_PRODUTO_PESO:   MAPPING LOAD CodProduto, ProdutoPesoCaixaKg                    RESIDENT SRC_PRODUTO;
+MAP_PRODUTO_DESC:   MAPPING LOAD CodProduto, ProdutoDescricao                      RESIDENT SRC_PRODUTO;
+MAP_PRODKEY_COD:    MAPPING LOAD AutoNumberHash128(CodProduto), CodProduto          RESIDENT SRC_PRODUTO;
+
+DROP TABLE SRC_PRODUTO;
+
+TRACE >> Dimensoes carregadas;
+
+
+/* ========================================================================== */
+
+///$tab 05 - Hero Map
+/* =============================================================================
+   DIM_HERO - COMPOSICAO DO MIX HERO POR REGIAO
+   -----------------------------------------------------------------------------
+   Um PDV e MIX HERO no mes quando comprou pelo menos 1 SKU de CADA uma das 3
+   categorias Hero. Nao precisa comprar todos os SKUs da categoria.
+
+   A composicao da Categoria 3 muda por regiao:
+       SP      -> Fatiados (Mussarela Fatiada, Mussarela Light, Prato Fatiado,
+                            Prato Light)
+       DEMAIS  -> Manteiga (Manteiga Com Sal, Manteiga Sem Sal)
+
+   Por isso a chave e COMPOSTA: %ChaveHero = RegiaoHero & '|' & Subcategoria.
+   O mesmo SKU "Manteiga Com Sal" conta Hero no Sul e NAO conta em Sao Paulo.
+   -----------------------------------------------------------------------------
+   ALTERAR A COMPOSICAO = alterar apenas o INLINE abaixo. Nenhuma expressao de
+   front-end conhece nomes de SKU.
+   ============================================================================= */
+
+HERO_COMPOSICAO:
+LOAD
+    RegiaoHero,
+    Capitalize(Trim(ProdutoSubcategoria)) AS ProdutoSubcategoria,
+    CategoriaHeroNum,
+    CategoriaHero,
+    'C' & CategoriaHeroNum                AS CategoriaHeroCurta
+INLINE [
+RegiaoHero, ProdutoSubcategoria, CategoriaHeroNum, CategoriaHero
+SP,     Creme Ricota,       1, Cat 1 - Ricota
+SP,     Creme Ricota Light, 1, Cat 1 - Ricota
+SP,     Requeijao,          2, Cat 2 - Requeijao
+SP,     Requeijao Light,    2, Cat 2 - Requeijao
+SP,     Mussarela Fatiada,  3, Cat 3 - Fatiados
+SP,     Mussarela Light,    3, Cat 3 - Fatiados
+SP,     Prato Fatiado,      3, Cat 3 - Fatiados
+SP,     Prato Light,        3, Cat 3 - Fatiados
+DEMAIS, Creme Ricota,       1, Cat 1 - Ricota
+DEMAIS, Creme Ricota Light, 1, Cat 1 - Ricota
+DEMAIS, Requeijao,          2, Cat 2 - Requeijao
+DEMAIS, Requeijao Light,    2, Cat 2 - Requeijao
+DEMAIS, Manteiga Com Sal,   3, Cat 3 - Manteiga
+DEMAIS, Manteiga Sem Sal,   3, Cat 3 - Manteiga
+];
+
+// -----------------------------------------------------------------------------
+// Mapa usado pela tabela fato para resolver a categoria Hero de cada linha
+// -----------------------------------------------------------------------------
+MAP_HERO:
+MAPPING LOAD
+    RegiaoHero & '|' & ProdutoSubcategoria,
+    RegiaoHero & '|' & ProdutoSubcategoria
+RESIDENT HERO_COMPOSICAO;
+
+// -----------------------------------------------------------------------------
+// DIM_HERO
+// A linha 'NAOHERO' evita chave nula no fato: toda venda tem %ChaveHero.
+// -----------------------------------------------------------------------------
+DIM_HERO:
+LOAD
+    RegiaoHero & '|' & ProdutoSubcategoria AS %ChaveHero,
+    CategoriaHero,
+    CategoriaHeroNum,
+    CategoriaHeroCurta,
+    RegiaoHero                             AS HeroRegiaoComposicao,
+    1                                      AS FlagHero
+RESIDENT HERO_COMPOSICAO;
+
+CONCATENATE (DIM_HERO)
+LOAD * INLINE [
+%ChaveHero, CategoriaHero, CategoriaHeroNum, CategoriaHeroCurta, HeroRegiaoComposicao, FlagHero
+NAOHERO, Fora do Mix Hero, 0, --, TODAS, 0
+];
+
+// -----------------------------------------------------------------------------
+// Grade de categorias esperadas por regiao - usada em "09 - Oportunidades"
+// para saber QUAL categoria falta em cada PDV. Ilha temporaria de script.
+// -----------------------------------------------------------------------------
+HERO_CATEGORIAS_REGIAO:
+LOAD DISTINCT
+    RegiaoHero,
+    CategoriaHeroNum,
+    CategoriaHero
+RESIDENT HERO_COMPOSICAO;
+
+MAP_HERO_CATNUM:
+MAPPING LOAD
+    RegiaoHero & '|' & ProdutoSubcategoria,
+    CategoriaHeroNum
+RESIDENT HERO_COMPOSICAO;
+
+MAP_HERO_CATLABEL:
+MAPPING LOAD DISTINCT
+    RegiaoHero & '|' & CategoriaHeroNum,
+    CategoriaHero
+RESIDENT HERO_COMPOSICAO;
+
+DROP TABLE HERO_COMPOSICAO;
+
+LET vQtdHeroSku = NoOfRows('DIM_HERO') - 1;
+TRACE >> DIM_HERO: $(vQtdHeroSku) combinacoes regiao x subcategoria mapeadas;
+
+
+/* ========================================================================== */
+
+///$tab 06 - Fato Sell Out
+/* =============================================================================
+   FACT_SELL_OUT
+   -----------------------------------------------------------------------------
+   Grao: Distribuidor x PDV x SKU x Dia.
+
+   Duas chaves compostas nascem aqui e sustentam todo o resto do modelo:
+     %ChaveDistMes     -> liga a FACT_PPT_MENSAL (metas e premiacao)
+     %ChaveDistPdvMes  -> liga a AGG_HERO_PDV_MES e as tabelas de oportunidade
+
+   FlagVenda separa linha real (1) de linha-esqueleto (0). TODA medida de
+   realizado usa {<FlagVenda={1}>}. Ver docs/02-modelo-dados.md §2.4.
+   ============================================================================= */
+
+FACT_SELL_OUT:
+LOAD
+    Num(Data)                                        AS %ChaveData,
+    AutoNumberHash128(CNPJ)                          AS %ChavePDV,
+    AutoNumberHash128(DistribuidorID)                AS %ChaveDistribuidor,
+    AutoNumberHash128(CodProduto)                    AS %ChaveProduto,
+    ChaveHero                                        AS %ChaveHero,
+    DistribuidorID & '|' & AnoMes                    AS %ChaveDistMes,
+    DistribuidorID & '|' & CNPJ & '|' & AnoMes       AS %ChaveDistPdvMes,
+    QtdCaixas,
+    Round(VolumeKg, 0.001)                           AS VolumeKg,
+    Round(VolumeKg / 1000, 0.000001)                 AS VolumeTon,
+    ValorSellOut,
+    1                                                AS FlagVenda,
+    NumeroDocumento,
+    Timestamp('$(vExecInicio)')                      AS DataIngestao
+;
+LOAD
+    *,
+    Date(MonthStart(Data), 'YYYY-MM')                AS AnoMes,
+    // Resolve a categoria Hero: composicao da regiao DO DISTRIBUIDOR
+    // cruzada com a subcategoria DO PRODUTO. Sem match -> 'NAOHERO'.
+    ApplyMap('MAP_HERO', RegiaoHeroDist & '|' & SubcategoriaProd, 'NAOHERO') AS ChaveHero,
+    QtdCaixas * PesoCaixa                            AS VolumeKg
+;
+LOAD
+    *,
+    ApplyMap('MAP_DIST_REGIAOHERO', DistribuidorID, 'DEMAIS') AS RegiaoHeroDist,
+    ApplyMap('MAP_PRODUTO_SUBCAT',  CodProduto, '')           AS SubcategoriaProd,
+    ApplyMap('MAP_PRODUTO_PESO',    CodProduto, 0)            AS PesoCaixa
+RESIDENT SRC_VENDA
+// Integridade referencial explicita: venda para PDV ou SKU inexistente nao
+// entra no fato - entraria como chave orfa e sumiria da tela sem aviso.
+WHERE Exists(CNPJ) AND Exists(CodProduto);
+
+// -----------------------------------------------------------------------------
+// Log de integridade referencial
+// -----------------------------------------------------------------------------
+CONCATENATE (QA_REJEITADOS)
+LOAD
+    'FACT_SELL_OUT'                                  AS QA_Tabela,
+    If(NOT Exists(CNPJ), 'Venda para CNPJ fora do cadastro de PDV',
+                         'Venda de SKU fora do cadastro de produto') AS QA_Motivo,
+    If(NOT Exists(CNPJ), CNPJ, CodProduto)           AS QA_Valor,
+    Count(CodProduto)                                AS QA_Ocorrencias
+RESIDENT SRC_VENDA
+WHERE NOT Exists(CNPJ) OR NOT Exists(CodProduto)
+GROUP BY
+    If(NOT Exists(CNPJ), 'Venda para CNPJ fora do cadastro de PDV',
+                         'Venda de SKU fora do cadastro de produto'),
+    If(NOT Exists(CNPJ), CNPJ, CodProduto);
+
+DROP TABLE SRC_VENDA;
+
+LET vLinhasFato = NoOfRows('FACT_SELL_OUT');
+TRACE >> FACT_SELL_OUT: $(vLinhasFato) linhas de venda;
+
+/* =============================================================================
+   LINHAS-ESQUELETO NIVEL DISTRIBUIDOR x MES
+   -----------------------------------------------------------------------------
+   Garante que TODO distribuidor elegivel tenha ancora em todos os meses da
+   janela, mesmo sem nenhuma venda. Sem isso, um distribuidor que zerou o mes
+   simplesmente desaparece da tela - exatamente o distribuidor que o executivo
+   mais precisa ver.
+   ============================================================================= */
+
+TMP_MESES:
+LOAD
+    Date(MonthStart(AddMonths($(vDataInicioNum), RecNo() - 1)), 'YYYY-MM') AS AnoMesEsq,
+    Num(MonthStart(AddMonths($(vDataInicioNum), RecNo() - 1)))             AS DataEsq
+AUTOGENERATE $(vMesesHistorico);
+
+TMP_ESQUELETO_DIST:
+LOAD
+    DistribuidorID,
+    %ChaveDistribuidor
+RESIDENT DIM_DISTRIBUIDOR
+WHERE FlagDistribuidorElegivel = 1;
+
+JOIN (TMP_ESQUELETO_DIST)
+LOAD AnoMesEsq, DataEsq RESIDENT TMP_MESES;
+
+CONCATENATE (FACT_SELL_OUT)
+LOAD
+    DataEsq                                          AS %ChaveData,
+    %ChaveDistribuidor,
+    DistribuidorID & '|' & AnoMesEsq                 AS %ChaveDistMes,
+    'NAOHERO'                                        AS %ChaveHero,
+    0                                                AS QtdCaixas,
+    0                                                AS VolumeKg,
+    0                                                AS VolumeTon,
+    0                                                AS ValorSellOut,
+    0                                                AS FlagVenda,
+    Timestamp('$(vExecInicio)')                      AS DataIngestao
+RESIDENT TMP_ESQUELETO_DIST;
+
+DROP TABLES TMP_ESQUELETO_DIST, TMP_MESES;
+
+LET vLinhasFatoTotal = NoOfRows('FACT_SELL_OUT');
+LET vLinhasEsqueleto = $(vLinhasFatoTotal) - $(vLinhasFato);
+TRACE >> Linhas-esqueleto distribuidor x mes: $(vLinhasEsqueleto);
+
+
+/* ========================================================================== */
+
+///$tab 07 - Agregado Hero
+/* =============================================================================
+   AGG_HERO_PDV_MES
+   -----------------------------------------------------------------------------
+   Grao: Distribuidor x PDV x Mes.
+
+   Materializa a regra: um PDV e HERO quando comprou >= 1 SKU de cada uma das 3
+   categorias Hero da regiao do seu distribuidor no mes.
+
+   Esta tabela e a espinha dorsal das Telas 3 (Navigator) e 4 (Oportunidades) e
+   da o RealMixHero da Tela 1. Calcular isso em Aggr() no cliente sobre 18M de
+   linhas seria inviavel - por isso vive aqui.
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 1. Flags de categoria por PDV x mes
+// -----------------------------------------------------------------------------
+TMP_HERO_FLAGS:
+LOAD
+    %ChaveDistPdvMes,
+    RangeMax(Max(Cat1), 0)             AS HeroCat1,
+    RangeMax(Max(Cat2), 0)             AS HeroCat2,
+    RangeMax(Max(Cat3), 0)             AS HeroCat3,
+    Sum(VolHeroTon)                    AS HeroVolumeTon,
+    Sum(VolTotalTon)                   AS HeroVolumeTotalTon,
+    Sum(VolTotalValor)                 AS HeroVolumeTotalValor,
+    Max(DataVenda)                     AS HeroUltimaCompraNum,
+    Count(DISTINCT CodProdutoHero)     AS HeroQtdSkusDistintos
+GROUP BY %ChaveDistPdvMes;
+LOAD
+    %ChaveDistPdvMes,
+    If(CatNum = 1, 1, 0)               AS Cat1,
+    If(CatNum = 2, 1, 0)               AS Cat2,
+    If(CatNum = 3, 1, 0)               AS Cat3,
+    If(CatNum > 0, VolumeTon, 0)       AS VolHeroTon,
+    VolumeTon                          AS VolTotalTon,
+    ValorSellOut                       AS VolTotalValor,
+    %ChaveData                         AS DataVenda,
+    If(CatNum > 0, %ChaveProduto, Null()) AS CodProdutoHero
+;
+LOAD
+    %ChaveDistPdvMes,
+    %ChaveProduto,
+    %ChaveData,
+    VolumeTon,
+    ValorSellOut,
+    Num(ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0)) AS CatNum
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1;
+
+// -----------------------------------------------------------------------------
+// 2. Status, cor e categorias faltantes
+// -----------------------------------------------------------------------------
+AGG_HERO_PDV_MES:
+LOAD
+    %ChaveDistPdvMes,
+    HeroDistribuidorID,
+    HeroCNPJ,
+    HeroAnoMes,
+    HeroRegiaoHero,
+    HeroCat1,
+    HeroCat2,
+    HeroCat3,
+    HeroQtdCategorias,
+    HeroQtdSkusDistintos,
+    Round(HeroVolumeTon, 0.000001)      AS HeroVolumeTon,
+    Round(HeroVolumeTotalTon, 0.000001) AS HeroVolumeTotalTon,
+    Round(HeroVolumeTotalValor, 0.01)   AS HeroVolumeTotalValor,
+    Date(HeroUltimaCompraNum)           AS HeroUltimaCompra,
+    HeroUltimaCompraNum,
+    If(HeroQtdCategorias = 3, 1, 0)     AS FlagPdvHero,
+    // Semantica visual da batalha naval (Tela 3)
+    Pick(HeroQtdCategorias + 1,
+         'Sem compra Hero', 'Falta 2+', 'Falta 1', 'Completo')      AS HeroStatus,
+    Pick(HeroQtdCategorias + 1,
+         'cinza', 'vermelho', 'amarelo', 'verde')                   AS HeroStatusCor,
+    // Quantas categorias faltam para virar Hero
+    3 - HeroQtdCategorias                                           AS HeroCategoriasFaltantesQtd,
+    // Quais faltam, em texto - alimenta a recomendacao da Tela 4
+    Trim(
+        If(HeroCat1 = 0, ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|1', 'Cat 1') & '; ', '') &
+        If(HeroCat2 = 0, ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|2', 'Cat 2') & '; ', '') &
+        If(HeroCat3 = 0, ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|3', 'Cat 3') & '; ', '')
+    )                                                               AS HeroCategoriasFaltantes,
+    // Quando falta exatamente 1, qual e o numero dela (drill direto ao SKU)
+    If(HeroQtdCategorias = 2,
+       If(HeroCat1 = 0, 1, If(HeroCat2 = 0, 2, 3)),
+       Null())                                                      AS HeroCategoriaFaltanteNum
+;
+LOAD
+    %ChaveDistPdvMes,
+    SubField(%ChaveDistPdvMes, '|', 1)                              AS HeroDistribuidorID,
+    SubField(%ChaveDistPdvMes, '|', 2)                              AS HeroCNPJ,
+    SubField(%ChaveDistPdvMes, '|', 3)                              AS HeroAnoMes,
+    ApplyMap('MAP_DIST_REGIAOHERO', SubField(%ChaveDistPdvMes, '|', 1), 'DEMAIS') AS HeroRegiaoHero,
+    HeroCat1, HeroCat2, HeroCat3,
+    HeroCat1 + HeroCat2 + HeroCat3                                  AS HeroQtdCategorias,
+    HeroQtdSkusDistintos,
+    HeroVolumeTon,
+    HeroVolumeTotalTon,
+    HeroVolumeTotalValor,
+    HeroUltimaCompraNum
+RESIDENT TMP_HERO_FLAGS;
+
+DROP TABLE TMP_HERO_FLAGS;
+
+// -----------------------------------------------------------------------------
+// 3. Mapas auxiliares para as oportunidades (aba 09)
+// -----------------------------------------------------------------------------
+MAP_AGG_HERO_FLAG:  MAPPING LOAD %ChaveDistPdvMes, FlagPdvHero      RESIDENT AGG_HERO_PDV_MES;
+MAP_AGG_HERO_VOL:   MAPPING LOAD %ChaveDistPdvMes, HeroVolumeTotalTon RESIDENT AGG_HERO_PDV_MES;
+
+LET vLinhasHero = NoOfRows('AGG_HERO_PDV_MES');
+TRACE >> AGG_HERO_PDV_MES: $(vLinhasHero) combinacoes PDV x mes avaliadas;
+
+
+/* ========================================================================== */
+
+///$tab 08 - PPT Mensal
+/* =============================================================================
+   FACT_PPT_MENSAL  -  O LIVRO-RAZAO DA PREMIACAO
+   -----------------------------------------------------------------------------
+   Grao: Distribuidor x Mes. Uma linha por competencia.
+
+   Contem, lado a lado e auditaveis:
+     meta | realizado | % atingimento | fator do degrau | premio R$
+     gap para o proximo degrau | quanto R$ esse gap vale
+     projecao de fechamento (ritmo de dias uteis) e premio projetado
+
+   Regra (docs/03-regras-negocio.md):
+     Premio(KPI) = SellIn x Peso(KPI) x Fator(%Ating)
+     Fator: >=100% -> 1,00 | >=95% -> 0,70 | >=90% -> 0,50 | <90% -> 0
+     Pesos: Positivacao 0,70% | Volume 0,70% | Mix Hero 0,60%  (total 2,00%)
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 1. Realizado de Positivacao e Volume
+// -----------------------------------------------------------------------------
+TMP_REAL:
+LOAD
+    %ChaveDistMes,
+    Count(DISTINCT %ChavePDV)          AS RealPositivacao,
+    Sum(VolumeTon)                     AS RealVolumeTon,
+    Sum(ValorSellOut)                  AS RealValorSellOut
+GROUP BY %ChaveDistMes;
+LOAD
+    %ChaveDistMes,
+    %ChavePDV,
+    VolumeTon,
+    ValorSellOut
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1;
+
+// Garante uma linha para todo distribuidor x mes elegivel, inclusive os que
+// zeraram o mes (as linhas-esqueleto da aba 06 sustentam a chave).
+JOIN (TMP_REAL)
+LOAD DISTINCT
+    %ChaveDistMes
+RESIDENT FACT_SELL_OUT;
+
+// -----------------------------------------------------------------------------
+// 2. Realizado de Mix Hero
+// -----------------------------------------------------------------------------
+TMP_REAL_HERO:
+LOAD
+    HeroDistribuidorID & '|' & HeroAnoMes AS %ChaveDistMes,
+    Sum(FlagPdvHero)                      AS RealMixHero,
+    Count(%ChaveDistPdvMes)               AS RealPdvComCompra,
+    Sum(If(HeroQtdCategorias = 2, 1, 0))  AS RealPdvFalta1,
+    Sum(If(HeroQtdCategorias = 1, 1, 0))  AS RealPdvFalta2,
+    Sum(If(HeroQtdCategorias = 0, 1, 0))  AS RealPdvFalta3
+RESIDENT AGG_HERO_PDV_MES
+GROUP BY HeroDistribuidorID & '|' & HeroAnoMes;
+
+JOIN (TMP_REAL) LOAD * RESIDENT TMP_REAL_HERO;
+DROP TABLE TMP_REAL_HERO;
+
+// -----------------------------------------------------------------------------
+// 3. Base consolidada com identificadores legiveis
+// -----------------------------------------------------------------------------
+TMP_BASE:
+LOAD
+    %ChaveDistMes,
+    SubField(%ChaveDistMes, '|', 1)                       AS PPT_DistribuidorID,
+    SubField(%ChaveDistMes, '|', 2)                       AS PPT_AnoMes,
+    Num(SubField(SubField(%ChaveDistMes, '|', 2), '-', 1) * 100
+      + SubField(SubField(%ChaveDistMes, '|', 2), '-', 2)) AS PPT_AnoMesNum,
+    RangeSum(RealPositivacao, 0)                          AS RealPositivacao,
+    Round(RangeSum(RealVolumeTon, 0), 0.000001)           AS RealVolumeTon,
+    RangeSum(RealValorSellOut, 0)                         AS RealValorSellOut,
+    RangeSum(RealMixHero, 0)                              AS RealMixHero,
+    RangeSum(RealPdvComCompra, 0)                         AS RealPdvComCompra,
+    RangeSum(RealPdvFalta1, 0)                            AS RealPdvFalta1,
+    RangeSum(RealPdvFalta2, 0)                            AS RealPdvFalta2,
+    RangeSum(RealPdvFalta3, 0)                            AS RealPdvFalta3
+RESIDENT TMP_REAL;
+
+DROP TABLE TMP_REAL;
+
+/* =============================================================================
+   4. METAS E SELL-IN
+   ============================================================================= */
+
+IF $(vUseMockData) THEN
+
+    // ---- MOCK -------------------------------------------------------------
+    // A meta do mes M deriva do realizado do mes M-1 multiplicado por um fator
+    // deterministico entre 0,88 e 1,25. Isso distribui os distribuidores pelas
+    // quatro faixas (<90 / 90-95 / 95-100 / >=100) e da o que testar em QA.
+    TMP_BASE_ORD:
+    NOCONCATENATE
+    LOAD *
+    RESIDENT TMP_BASE
+    ORDER BY PPT_DistribuidorID, PPT_AnoMesNum;
+
+    DROP TABLE TMP_BASE;
+
+    TMP_METAS:
+    LOAD
+        %ChaveDistMes,
+        PPT_DistribuidorID,
+        PPT_AnoMes,
+        PPT_AnoMesNum,
+        RealPositivacao, RealVolumeTon, RealValorSellOut, RealMixHero,
+        RealPdvComCompra, RealPdvFalta1, RealPdvFalta2, RealPdvFalta3,
+        // Base = realizado do mes anterior do MESMO distribuidor
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealPositivacao), RealPositivacao)          AS BasePositivacao,
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealVolumeTon), RealVolumeTon)              AS BaseVolumeTon,
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealMixHero), RealMixHero)                  AS BaseMixHero,
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealValorSellOut), RealValorSellOut)        AS BaseValorSellOut,
+        0.88 + $(vHash(PPT_AnoMesNum + RecNo() * 7, 12.98)) * 0.37 AS FatorMetaPos,
+        0.88 + $(vHash(PPT_AnoMesNum + RecNo() * 11, 15.31)) * 0.37 AS FatorMetaVol,
+        0.85 + $(vHash(PPT_AnoMesNum + RecNo() * 13, 18.77)) * 0.40 AS FatorMetaHero
+    RESIDENT TMP_BASE_ORD;
+
+    DROP TABLE TMP_BASE_ORD;
+
+    TMP_BASE:
+    NOCONCATENATE
+    LOAD
+        %ChaveDistMes, PPT_DistribuidorID, PPT_AnoMes, PPT_AnoMesNum,
+        RealPositivacao, RealVolumeTon, RealValorSellOut, RealMixHero,
+        RealPdvComCompra, RealPdvFalta1, RealPdvFalta2, RealPdvFalta3,
+        RangeMax(1, Round(BasePositivacao * FatorMetaPos))          AS MetaPositivacao,
+        RangeMax(0.001, Round(BaseVolumeTon * FatorMetaVol, 0.001)) AS MetaVolumeTon,
+        RangeMax(1, Round(BaseMixHero * FatorMetaHero))             AS MetaMixHero,
+        // Sell-in mock = 78% do sell-out. No mes corrente usa o mes anterior
+        // (o sell-in do mes ainda esta em curso).
+        Round(If(PPT_AnoMesNum = $(vAnoMesAtual),
+                 BaseValorSellOut, RealValorSellOut) * 0.78, 0.01)  AS SellInValor,
+        If(PPT_AnoMesNum < $(vAnoMesAtual), 1, 0)                   AS FlagMesFechado
+    RESIDENT TMP_METAS;
+
+    DROP TABLE TMP_METAS;
+
+ELSE
+
+    // ---- PRODUCAO ---------------------------------------------------------
+    LEFT JOIN (TMP_BASE)
+    LOAD
+        DistribuidorID & '|' & AnoMes AS %ChaveDistMes,
+        MetaPositivacao,
+        MetaVolumeTon,
+        MetaMixHero
+    RESIDENT SRC_META;
+    DROP TABLE SRC_META;
+
+    LEFT JOIN (TMP_BASE)
+    LOAD
+        DistribuidorID & '|' & AnoMes AS %ChaveDistMes,
+        SellInValor,
+        FlagMesFechado
+    RESIDENT SRC_SELLIN;
+    DROP TABLE SRC_SELLIN;
+
+END IF;
+
+/* =============================================================================
+   5. ATINGIMENTO, DEGRAUS, PREMIACAO, GAPS E PROJECAO
+   -----------------------------------------------------------------------------
+   NOTA DE SINTAXE: $(vFatorPremio(x)) so aceita um argumento SEM virgulas -
+   a expansao com parametros quebra o argumento em cada virgula. Por isso todo
+   percentual de atingimento e materializado como CAMPO nas cargas precedentes
+   antes de ser passado para as funcoes de degrau.
+   ============================================================================= */
+
+FACT_PPT_MENSAL:
+LOAD
+    %ChaveDistMes,
+    PPT_DistribuidorID,
+    PPT_AnoMes,
+    PPT_AnoMesNum,
+    FlagMesFechado,
+    SellInValor,
+
+    // --- Metas e realizado ---------------------------------------------------
+    MetaPositivacao, MetaVolumeTon, MetaMixHero,
+    RealPositivacao, RealVolumeTon, RealMixHero,
+    RealPdvComCompra, RealPdvFalta1, RealPdvFalta2, RealPdvFalta3,
+    RealValorSellOut,
+
+    // --- Atingimento ---------------------------------------------------------
+    AtingPositivacao, AtingVolume, AtingMixHero,
+    Round(RangeSum(AtingPositivacao, AtingVolume, AtingMixHero) / 3, 0.0001) AS AtingMedio,
+
+    // --- Fator do degrau -----------------------------------------------------
+    $(vFatorPremio(AtingPositivacao))                     AS FatorPositivacao,
+    $(vFatorPremio(AtingVolume))                          AS FatorVolume,
+    $(vFatorPremio(AtingMixHero))                         AS FatorMixHero,
+
+    // --- Premiacao R$ --------------------------------------------------------
+    Round(SellInValor * $(vPesoPositivacao) * $(vFatorPremio(AtingPositivacao)), 0.01) AS PremioPositivacao,
+    Round(SellInValor * $(vPesoVolume)      * $(vFatorPremio(AtingVolume)),      0.01) AS PremioVolume,
+    Round(SellInValor * $(vPesoMixHero)     * $(vFatorPremio(AtingMixHero)),     0.01) AS PremioMixHero,
+    Round(SellInValor * ($(vPesoPositivacao) * $(vFatorPremio(AtingPositivacao))
+                       + $(vPesoVolume)      * $(vFatorPremio(AtingVolume))
+                       + $(vPesoMixHero)     * $(vFatorPremio(AtingMixHero))), 0.01)  AS PremioTotal,
+    Round(SellInValor * $(vPesoTotal), 0.01)              AS PremioPotencialTotal,
+    // Dinheiro deixado na mesa
+    Round(SellInValor * $(vPesoTotal)
+        - SellInValor * ($(vPesoPositivacao) * $(vFatorPremio(AtingPositivacao))
+                       + $(vPesoVolume)      * $(vFatorPremio(AtingVolume))
+                       + $(vPesoMixHero)     * $(vFatorPremio(AtingMixHero))), 0.01)  AS PremioNaoCapturado,
+
+    // --- Proximo degrau: o gap acionavel -------------------------------------
+    ProxDegrauPositivacao, ProxDegrauVolume, ProxDegrauMixHero,
+
+    // Quantos PDVs / toneladas faltam para cruzar o proximo degrau
+    If(ProxDegrauPositivacao = 0, 0,
+       RangeMax(0, Ceil(MetaPositivacao * ProxDegrauPositivacao) - RealPositivacao))    AS GapPositivacaoUn,
+    If(ProxDegrauVolume = 0, 0,
+       Round(RangeMax(0, MetaVolumeTon * ProxDegrauVolume - RealVolumeTon), 0.001))     AS GapVolumeTon,
+    If(ProxDegrauMixHero = 0, 0,
+       RangeMax(0, Ceil(MetaMixHero * ProxDegrauMixHero) - RealMixHero))                AS GapMixHeroUn,
+
+    // Quanto R$ vale cruzar cada proximo degrau
+    Round(If(ProxDegrauPositivacao = 0, 0, SellInValor * $(vPesoPositivacao)
+        * ($(vFatorProximoDegrau(AtingPositivacao)) - $(vFatorPremio(AtingPositivacao)))), 0.01) AS GanhoProxDegrauPositivacao,
+    Round(If(ProxDegrauVolume = 0, 0, SellInValor * $(vPesoVolume)
+        * ($(vFatorProximoDegrau(AtingVolume)) - $(vFatorPremio(AtingVolume)))), 0.01)           AS GanhoProxDegrauVolume,
+    Round(If(ProxDegrauMixHero = 0, 0, SellInValor * $(vPesoMixHero)
+        * ($(vFatorProximoDegrau(AtingMixHero)) - $(vFatorPremio(AtingMixHero)))), 0.01)         AS GanhoProxDegrauMixHero,
+    Round(If(ProxDegrauPositivacao = 0, 0, SellInValor * $(vPesoPositivacao)
+             * ($(vFatorProximoDegrau(AtingPositivacao)) - $(vFatorPremio(AtingPositivacao))))
+        + If(ProxDegrauVolume = 0, 0, SellInValor * $(vPesoVolume)
+             * ($(vFatorProximoDegrau(AtingVolume)) - $(vFatorPremio(AtingVolume))))
+        + If(ProxDegrauMixHero = 0, 0, SellInValor * $(vPesoMixHero)
+             * ($(vFatorProximoDegrau(AtingMixHero)) - $(vFatorPremio(AtingMixHero)))), 0.01)    AS GanhoProxDegrauTotal,
+
+    // --- Gap ate 100% (teto da premiacao) ------------------------------------
+    RangeMax(0, MetaPositivacao - RealPositivacao)                        AS Gap100PositivacaoUn,
+    Round(RangeMax(0, MetaVolumeTon - RealVolumeTon), 0.001)              AS Gap100VolumeTon,
+    RangeMax(0, MetaMixHero - RealMixHero)                                AS Gap100MixHeroUn,
+
+    // --- Projecao de fechamento (ritmo de dias uteis) ------------------------
+    DiasUteisDecorridos, DiasUteisTotais,
+    Round(ProjPositivacao)                                               AS ProjPositivacao,
+    Round(ProjVolumeTon, 0.001)                                          AS ProjVolumeTon,
+    Round(ProjMixHero)                                                   AS ProjMixHero,
+    AtingProjPositivacao, AtingProjVolume, AtingProjMixHero,
+    Round(SellInValor * ($(vPesoPositivacao) * $(vFatorPremio(AtingProjPositivacao))
+                       + $(vPesoVolume)      * $(vFatorPremio(AtingProjVolume))
+                       + $(vPesoMixHero)     * $(vFatorPremio(AtingProjMixHero))), 0.01) AS PremioProjetado,
+
+    // --- Semaforo do distribuidor -------------------------------------------
+    // Olha a PROJECAO, nao o realizado. Avisar no dia 30 que o distribuidor
+    // perdeu a premiacao nao e um alerta, e um obituario.
+    If(FatorProjMin = 0, 'Risco alto',
+       If(FatorProjMin < 1, 'Atencao', 'No alvo'))                        AS PPT_StatusRisco,
+    FatorProjMin
+;
+LOAD
+    *,
+    RangeMin($(vFatorPremio(AtingProjPositivacao)),
+             $(vFatorPremio(AtingProjVolume)),
+             $(vFatorPremio(AtingProjMixHero)))                           AS FatorProjMin,
+    $(vProximoDegrau(AtingPositivacao))                                   AS ProxDegrauPositivacao,
+    $(vProximoDegrau(AtingVolume))                                        AS ProxDegrauVolume,
+    $(vProximoDegrau(AtingMixHero))                                       AS ProxDegrauMixHero
+;
+LOAD
+    *,
+    Round(If(MetaPositivacao > 0, ProjPositivacao / MetaPositivacao, 0), 0.0001) AS AtingProjPositivacao,
+    Round(If(MetaVolumeTon   > 0, ProjVolumeTon   / MetaVolumeTon,   0), 0.0001) AS AtingProjVolume,
+    Round(If(MetaMixHero     > 0, ProjMixHero     / MetaMixHero,     0), 0.0001) AS AtingProjMixHero
+;
+LOAD
+    *,
+    // Projecao linear pelo ritmo de dias uteis. Em mes fechado
+    // DiasUteisDecorridos = DiasUteisTotais, logo projecao = realizado.
+    If(DiasUteisDecorridos > 0, RealPositivacao / DiasUteisDecorridos * DiasUteisTotais, RealPositivacao) AS ProjPositivacao,
+    If(DiasUteisDecorridos > 0, RealVolumeTon   / DiasUteisDecorridos * DiasUteisTotais, RealVolumeTon)   AS ProjVolumeTon,
+    If(DiasUteisDecorridos > 0, RealMixHero     / DiasUteisDecorridos * DiasUteisTotais, RealMixHero)     AS ProjMixHero
+;
+LOAD
+    *,
+    Round(If(MetaPositivacao > 0, RealPositivacao / MetaPositivacao, 0), 0.0001) AS AtingPositivacao,
+    Round(If(MetaVolumeTon   > 0, RealVolumeTon   / MetaVolumeTon,   0), 0.0001) AS AtingVolume,
+    Round(If(MetaMixHero     > 0, RealMixHero     / MetaMixHero,     0), 0.0001) AS AtingMixHero,
+    Num(ApplyMap('MAP_DU_DECORRIDOS', PPT_AnoMesNum, 21))                        AS DiasUteisDecorridos,
+    Num(ApplyMap('MAP_DU_TOTAIS',     PPT_AnoMesNum, 21))                        AS DiasUteisTotais
+RESIDENT TMP_BASE
+WHERE Len(Trim(PPT_DistribuidorID)) > 0;
+
+DROP TABLE TMP_BASE;
+
+LET vLinhasPPT = NoOfRows('FACT_PPT_MENSAL');
+TRACE >> FACT_PPT_MENSAL: $(vLinhasPPT) competencias distribuidor x mes;
+
+// Mapas usados na aba 09 para converter oportunidade em R$
+MAP_PPT_SELLIN:     MAPPING LOAD %ChaveDistMes, SellInValor       RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_METAHERO:   MAPPING LOAD %ChaveDistMes, MetaMixHero       RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_REALHERO:   MAPPING LOAD %ChaveDistMes, RealMixHero       RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_METAPOS:    MAPPING LOAD %ChaveDistMes, MetaPositivacao   RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_REALPOS:    MAPPING LOAD %ChaveDistMes, RealPositivacao   RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_METAVOL:    MAPPING LOAD %ChaveDistMes, MetaVolumeTon     RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_REALVOL:    MAPPING LOAD %ChaveDistMes, RealVolumeTon     RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_ATINGHERO:  MAPPING LOAD %ChaveDistMes, AtingMixHero      RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_ATINGPOS:   MAPPING LOAD %ChaveDistMes, AtingPositivacao  RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GAPHERO:    MAPPING LOAD %ChaveDistMes, GapMixHeroUn      RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GANHOHERO:  MAPPING LOAD %ChaveDistMes, GanhoProxDegrauMixHero    RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GAPPOS:     MAPPING LOAD %ChaveDistMes, GapPositivacaoUn  RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GANHOPOS:   MAPPING LOAD %ChaveDistMes, GanhoProxDegrauPositivacao RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GAPVOL:     MAPPING LOAD %ChaveDistMes, GapVolumeTon      RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GANHOVOL:   MAPPING LOAD %ChaveDistMes, GanhoProxDegrauVolume     RESIDENT FACT_PPT_MENSAL;
+
+
+/* ========================================================================== */
+
+///$tab 09 - Oportunidades
+/* =============================================================================
+   MOTOR DE OPORTUNIDADES
+   -----------------------------------------------------------------------------
+   Produz as tres tabelas que sustentam as Telas 2, 3, 4 e 5:
+
+     OPP_POSITIVACAO  - PDV que comprou nos ultimos 3 meses e NAO comprou no mes
+     OPP_RECUPERACAO  - PDV que comprou, mas abaixo da propria media historica
+     OPP_HERO         - PDV incompleto + qual SKU vender + quanto isso vale
+
+   Todas respondem as mesmas perguntas: onde atuar, qual PDV, qual SKU, quanto
+   isso aproxima da meta e quanto aumenta a premiacao.
+   ============================================================================= */
+
+// Indice continuo de mes: idx = Ano * 12 + (Mes - 1). Aritmetica de janela sem
+// dor de cabeca com virada de ano.
+LET vIdxAtual   = Year('$(vDataHoje)') * 12 + Month('$(vDataHoje)') - 1;
+LET vIdxInicio  = $(vIdxAtual) - $(vMesesHistorico) + 1;
+// So faz sentido calcular oportunidade a partir do 4o mes da janela (precisa
+// de 3 meses de historico atras dele).
+LET vIdxPrimeiroAlvo = $(vIdxInicio) + $(vJanelaRecenciaMeses);
+
+/* =============================================================================
+   1. TABELA DE PRESENCA (PDV x mes com compra)
+   ============================================================================= */
+TMP_PRESENCA:
+LOAD
+    HeroDistribuidorID                                       AS OppDist,
+    HeroCNPJ                                                 AS OppCNPJ,
+    SubField(HeroAnoMes, '-', 1) * 12 + SubField(HeroAnoMes, '-', 2) - 1 AS PresIdx,
+    HeroVolumeTotalTon                                       AS PresVolTon,
+    HeroVolumeTotalValor                                     AS PresValor,
+    FlagPdvHero                                              AS PresHero,
+    HeroUltimaCompraNum                                      AS PresUltimaCompraNum
+RESIDENT AGG_HERO_PDV_MES;
+
+// Chave de presenca - usada como anti-join (Exists) mais adiante
+TMP_CHAVE_PRESENCA:
+LOAD DISTINCT
+    OppDist & '|' & OppCNPJ & '|' & PresIdx                  AS %ChavePresenca
+RESIDENT TMP_PRESENCA;
+
+MAP_PRESENCA_VOL:
+MAPPING LOAD OppDist & '|' & OppCNPJ & '|' & PresIdx, PresVolTon RESIDENT TMP_PRESENCA;
+
+/* =============================================================================
+   2. FAN-OUT DA JANELA DE 3 MESES
+   -----------------------------------------------------------------------------
+   Cada mes com compra projeta 3 meses-alvo a frente (m+1, m+2, m+3). Agregando
+   por (distribuidor, PDV, mes-alvo) obtem-se, de uma vez, a media dos ultimos 3
+   meses, a frequencia e a ultima compra - para TODOS os meses da janela.
+   ============================================================================= */
+TMP_FANOUT:
+NOCONCATENATE
+LOAD * RESIDENT TMP_PRESENCA;
+
+JOIN (TMP_FANOUT)
+LOAD RecNo() AS kOffset AUTOGENERATE $(vJanelaRecenciaMeses);
+
+TMP_OPP_BASE:
+LOAD
+    OppDist,
+    OppCNPJ,
+    AlvoIdx,
+    Count(DISTINCT PresIdx)                                  AS OppMesesAtivoU3M,
+    // Media sobre a JANELA (divide por 3), nao sobre os meses ativos.
+    // E o volume mensal que o PDV representava - leitura conservadora.
+    Sum(PresVolTon) / $(vJanelaRecenciaMeses)                AS OppMediaU3MTon,
+    Sum(PresValor)  / $(vJanelaRecenciaMeses)                AS OppMediaU3MValor,
+    Max(PresUltimaCompraNum)                                 AS OppUltimaCompraNum,
+    Max(PresHero)                                            AS OppEraHero
+GROUP BY OppDist, OppCNPJ, AlvoIdx;
+LOAD
+    OppDist,
+    OppCNPJ,
+    PresIdx,
+    PresIdx + kOffset                                        AS AlvoIdx,
+    PresVolTon,
+    PresValor,
+    PresHero,
+    PresUltimaCompraNum
+RESIDENT TMP_FANOUT
+WHERE PresIdx + kOffset >= $(vIdxPrimeiroAlvo)
+  AND PresIdx + kOffset <= $(vIdxAtual);
+
+DROP TABLE TMP_FANOUT;
+
+/* =============================================================================
+   3. OPP_POSITIVACAO - quem sumiu
+   ============================================================================= */
+TMP_OPP_POS:
+LOAD
+    OppDist,
+    OppCNPJ,
+    AlvoIdx,
+    OppAnoMes,
+    OppDist & '|' & OppCNPJ & '|' & OppAnoMes                AS %ChaveDistPdvMes,
+    OppDist & '|' & OppAnoMes                                AS ChaveDistMesAux,
+    OppMesesAtivoU3M,
+    Round(OppMediaU3MTon, 0.000001)                          AS OppPos_MediaU3MTon,
+    Round(OppMediaU3MValor, 0.01)                            AS OppPos_MediaU3MValor,
+    Date(OppUltimaCompraNum)                                 AS OppPos_UltimaCompra,
+    OppEraHero                                               AS OppPos_EraHero,
+    // Data de referencia: hoje no mes corrente, fim do mes nos meses fechados
+    RangeMax(0, If(AlvoIdx = $(vIdxAtual), $(vDataHojeNum),
+                   Num(MonthEnd(MakeDate(Floor(AlvoIdx / 12), Mod(AlvoIdx, 12) + 1, 1))))
+                - OppUltimaCompraNum)                        AS OppPos_DiasSemComprar
+;
+LOAD
+    *,
+    Date(MakeDate(Floor(AlvoIdx / 12), Mod(AlvoIdx, 12) + 1, 1), 'YYYY-MM') AS OppAnoMes
+RESIDENT TMP_OPP_BASE
+// A definicao do problema: comprou na janela, NAO comprou no mes-alvo
+WHERE NOT Exists(%ChavePresenca, OppDist & '|' & OppCNPJ & '|' & AlvoIdx);
+
+// Normalizador de volume por distribuidor x mes (score comparavel dentro da
+// carteira do distribuidor, nao contra a base inteira)
+TMP_MAX_POS:
+LOAD
+    ChaveDistMesAux                                          AS %ChaveNormPos,
+    Max(OppPos_MediaU3MTon)                                  AS MaxMediaPos
+RESIDENT TMP_OPP_POS
+GROUP BY ChaveDistMesAux;
+
+MAP_NORM_POS: MAPPING LOAD %ChaveNormPos, MaxMediaPos RESIDENT TMP_MAX_POS;
+DROP TABLE TMP_MAX_POS;
+
+OPP_POSITIVACAO:
+LOAD
+    %ChaveDistPdvMes,
+    OppPos_CNPJ,
+    OppPos_PDVFantasia,
+    OppPos_PDVCanal,
+    OppPos_PDVCidade,
+    OppPos_AnoMes,
+    OppPos_MesesAtivoU3M,
+    OppPos_MediaU3MTon,
+    OppPos_MediaU3MValor,
+    OppPos_UltimaCompra,
+    OppPos_DiasSemComprar,
+    OppPos_EraHero,
+    // Volume que o distribuidor deixa de faturar se nao recuperar este PDV
+    OppPos_MediaU3MTon                                       AS OppPos_VolumePotencialPerdidoTon,
+    OppPos_MediaU3MValor                                     AS OppPos_VolumePotencialPerdidoValor,
+    // Cada PDV recuperado vale 1 no KPI Positivacao. Quantos ainda faltam para
+    // o proximo degrau e quanto R$ esse degrau paga:
+    OppPos_GapDegrauPdvs,
+    OppPos_ValorDegrauTotal,
+    Round(If(OppPos_GapDegrauPdvs > 0,
+             OppPos_ValorDegrauTotal / OppPos_GapDegrauPdvs, 0), 0.01) AS OppPos_ValorPorPdvRecuperado,
+    Round(OppPos_Score, 0.1)                                 AS OppPos_Score,
+    If(OppPos_Score >= 75, 'Critico',
+    If(OppPos_Score >= 55, 'Alto',
+    If(OppPos_Score >= 35, 'Medio', 'Baixo')))               AS OppPos_Faixa
+;
+LOAD
+    *,
+    // Score 0-100. Pesos em "01 - Variaveis" - mexer la, nunca aqui.
+    $(vScorePosPesoVolume)     * sVolume
+  + $(vScorePosPesoRecencia)   * sRecencia
+  + $(vScorePosPesoFrequencia) * sFrequencia
+  + $(vScorePosPesoHero)       * sHero                       AS OppPos_Score
+;
+LOAD
+    %ChaveDistPdvMes,
+    OppCNPJ                                                  AS OppPos_CNPJ,
+    ApplyMap('MAP_PDV_FANTASIA', OppCNPJ, 'PDV nao cadastrado') AS OppPos_PDVFantasia,
+    ApplyMap('MAP_PDV_CANAL',    OppCNPJ, 'ND')              AS OppPos_PDVCanal,
+    ApplyMap('MAP_PDV_CIDADE',   OppCNPJ, 'ND')              AS OppPos_PDVCidade,
+    OppAnoMes                                                AS OppPos_AnoMes,
+    OppMesesAtivoU3M                                         AS OppPos_MesesAtivoU3M,
+    OppPos_MediaU3MTon,
+    OppPos_MediaU3MValor,
+    OppPos_UltimaCompra,
+    OppPos_DiasSemComprar,
+    OppPos_EraHero,
+    Num(ApplyMap('MAP_PPT_GAPPOS',   ChaveDistMesAux, 0))    AS OppPos_GapDegrauPdvs,
+    Num(ApplyMap('MAP_PPT_GANHOPOS', ChaveDistMesAux, 0))    AS OppPos_ValorDegrauTotal,
+    // Componentes normalizados do score
+    RangeMin(1, If(ApplyMap('MAP_NORM_POS', ChaveDistMesAux, 0) > 0,
+                   OppPos_MediaU3MTon / ApplyMap('MAP_NORM_POS', ChaveDistMesAux, 1), 0)) AS sVolume,
+    RangeMax(0, 1 - RangeMin(1, OppPos_DiasSemComprar / 90)) AS sRecencia,
+    OppMesesAtivoU3M / $(vJanelaRecenciaMeses)               AS sFrequencia,
+    OppPos_EraHero                                           AS sHero
+RESIDENT TMP_OPP_POS;
+
+// -----------------------------------------------------------------------------
+// Linhas-esqueleto para os PDVs de oportunidade
+// Sem elas o %ChaveDistPdvMes da oportunidade nao existe no fato (o PDV nao
+// comprou!) e a tabela inteira ficaria orfa. Ver docs/02 §2.4.
+// -----------------------------------------------------------------------------
+CONCATENATE (FACT_SELL_OUT)
+LOAD
+    Num(MonthStart(Date#(OppPos_AnoMes, 'YYYY-MM')))         AS %ChaveData,
+    AutoNumberHash128(OppPos_CNPJ)                           AS %ChavePDV,
+    AutoNumberHash128(SubField(%ChaveDistPdvMes, '|', 1))    AS %ChaveDistribuidor,
+    SubField(%ChaveDistPdvMes, '|', 1) & '|' & OppPos_AnoMes AS %ChaveDistMes,
+    %ChaveDistPdvMes,
+    'NAOHERO'                                                AS %ChaveHero,
+    0 AS QtdCaixas, 0 AS VolumeKg, 0 AS VolumeTon, 0 AS ValorSellOut,
+    0                                                        AS FlagVenda,
+    Timestamp('$(vExecInicio)')                              AS DataIngestao
+RESIDENT OPP_POSITIVACAO;
+
+LET vLinhasOppPos = NoOfRows('OPP_POSITIVACAO');
+TRACE >> OPP_POSITIVACAO: $(vLinhasOppPos) oportunidades de recuperacao de PDV;
+
+/* =============================================================================
+   4. OPP_RECUPERACAO - quem comprou, mas encolheu
+   -----------------------------------------------------------------------------
+   Mesma base de calculo da positivacao. A diferenca e o lado do filtro: aqui o
+   PDV COMPROU no mes-alvo, so que abaixo da propria media dos 3 meses.
+   ============================================================================= */
+TMP_OPP_REC:
+LOAD
+    OppDist & '|' & OppCNPJ & '|' & OppAnoMes                 AS %ChaveDistPdvMes,
+    OppDist & '|' & OppAnoMes                                 AS ChaveDistMesRec,
+    OppCNPJ                                                   AS OppRec_CNPJ,
+    ApplyMap('MAP_PDV_FANTASIA', OppCNPJ, 'PDV nao cadastrado') AS OppRec_PDVFantasia,
+    ApplyMap('MAP_PDV_CANAL',    OppCNPJ, 'ND')               AS OppRec_PDVCanal,
+    ApplyMap('MAP_PDV_CIDADE',   OppCNPJ, 'ND')               AS OppRec_PDVCidade,
+    OppAnoMes                                                 AS OppRec_AnoMes,
+    Round(OppMediaU3MTon, 0.000001)                           AS OppRec_MediaU3MTon,
+    Round(VolumeMesTon, 0.000001)                             AS OppRec_VolumeMesTon,
+    Round(OppMediaU3MTon - VolumeMesTon, 0.000001)            AS OppRec_QuedaTon,
+    Round((OppMediaU3MTon - VolumeMesTon) / OppMediaU3MTon, 0.0001) AS OppRec_QuedaPerc,
+    OppMesesAtivoU3M                                          AS OppRec_MesesAtivoU3M,
+    OppEraHero                                                AS OppRec_EraHero
+;
+LOAD
+    *,
+    Num(ApplyMap('MAP_PRESENCA_VOL', OppDist & '|' & OppCNPJ & '|' & AlvoIdx, 0)) AS VolumeMesTon,
+    Date(MakeDate(Floor(AlvoIdx / 12), Mod(AlvoIdx, 12) + 1, 1), 'YYYY-MM')       AS OppAnoMes
+RESIDENT TMP_OPP_BASE
+// Comprou no mes-alvo E caiu mais que o limite configurado (vQuedaMinimaRecuperacao)
+WHERE Exists(%ChavePresenca, OppDist & '|' & OppCNPJ & '|' & AlvoIdx)
+  AND OppMediaU3MTon > 0
+  AND Num(ApplyMap('MAP_PRESENCA_VOL', OppDist & '|' & OppCNPJ & '|' & AlvoIdx, 0))
+      < OppMediaU3MTon * (1 - $(vQuedaMinimaRecuperacao));
+
+// Normalizador: a maior queda dentro da carteira do distribuidor naquele mes.
+// Score comparavel entre PDVs do mesmo distribuidor - nao contra a base toda.
+TMP_MAX_REC:
+LOAD
+    ChaveDistMesRec        AS %ChaveNormRec,
+    Max(OppRec_QuedaTon)   AS MaxQuedaDist
+RESIDENT TMP_OPP_REC
+GROUP BY ChaveDistMesRec;
+
+MAP_NORM_REC: MAPPING LOAD %ChaveNormRec, MaxQuedaDist RESIDENT TMP_MAX_REC;
+DROP TABLE TMP_MAX_REC;
+
+OPP_RECUPERACAO:
+LOAD
+    %ChaveDistPdvMes,
+    OppRec_CNPJ, OppRec_PDVFantasia, OppRec_PDVCanal, OppRec_PDVCidade,
+    OppRec_AnoMes, OppRec_MediaU3MTon, OppRec_VolumeMesTon,
+    OppRec_QuedaTon, OppRec_QuedaPerc, OppRec_MesesAtivoU3M, OppRec_EraHero,
+    OppRec_GapVolumeTon,
+    OppRec_ValorDegrauVolume,
+    // Se este PDV voltar a media, quanto do gap de volume do distribuidor ele
+    // resolve sozinho? E quanto R$ isso representa no degrau.
+    OppRec_CoberturaDoGap,
+    Round(OppRec_CoberturaDoGap * OppRec_ValorDegrauVolume, 0.01) AS OppRec_ValorPotencial,
+    Round(OppRec_Score, 0.1)                                      AS OppRec_Score,
+    If(OppRec_Score >= 75, 'Critico',
+    If(OppRec_Score >= 55, 'Alto',
+    If(OppRec_Score >= 35, 'Medio', 'Baixo')))                    AS OppRec_Faixa
+;
+LOAD
+    *,
+    // 60% tamanho absoluto da queda (o que move o ponteiro do KPI)
+    // 40% severidade relativa (o que indica cliente em fuga)
+    60 * RangeMin(1, If(MaxQuedaDist > 0, OppRec_QuedaTon / MaxQuedaDist, 0))
+  + 40 * RangeMin(1, OppRec_QuedaPerc)                            AS OppRec_Score
+;
+LOAD
+    *,
+    Num(ApplyMap('MAP_NORM_REC', ChaveDistMesRec, 0))             AS MaxQuedaDist,
+    Num(ApplyMap('MAP_PPT_GAPVOL',   ChaveDistMesRec, 0))         AS OppRec_GapVolumeTon,
+    Num(ApplyMap('MAP_PPT_GANHOVOL', ChaveDistMesRec, 0))         AS OppRec_ValorDegrauVolume,
+    Round(If(Num(ApplyMap('MAP_PPT_GAPVOL', ChaveDistMesRec, 0)) > 0,
+             RangeMin(1, OppRec_QuedaTon / Num(ApplyMap('MAP_PPT_GAPVOL', ChaveDistMesRec, 1))),
+             0), 0.0001)                                          AS OppRec_CoberturaDoGap
+RESIDENT TMP_OPP_REC;
+
+DROP TABLE TMP_OPP_REC;
+DROP TABLE TMP_OPP_BASE;
+DROP TABLE TMP_OPP_POS;
+DROP TABLE TMP_CHAVE_PRESENCA;
+DROP TABLE TMP_PRESENCA;
+
+LET vLinhasOppRec = NoOfRows('OPP_RECUPERACAO');
+TRACE >> OPP_RECUPERACAO: $(vLinhasOppRec) PDVs abaixo da media historica;
+
+/* =============================================================================
+   5. OPP_HERO - qual SKU vender para completar o mix
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 5.1 Ranking de SKU por regiao x categoria x canal (penetracao em PDVs)
+//     Penetracao, nao volume: para completar mix o que importa e o SKU que o
+//     canal mais aceita, nao o que gera mais tonelada.
+// -----------------------------------------------------------------------------
+LET vIdxRank = $(vIdxAtual) - 5;   // ultimos 6 meses
+
+TMP_RANK_BASE:
+LOAD
+    RankRegiaoHero & '|' & RankCatNum & '|' & RankCanal      AS %RankGrupoCanal,
+    RankRegiaoHero & '|' & RankCatNum                        AS %RankGrupoRegiao,
+    RankCodProduto,
+    Count(DISTINCT %ChaveDistPdvMes)                         AS RankPDVs,
+    Sum(RankVolumeTon)                                       AS RankVolumeTon
+GROUP BY RankRegiaoHero, RankCatNum, RankCanal, RankCodProduto;
+LOAD
+    %ChaveDistPdvMes,
+    SubField(%ChaveHero, '|', 1)                             AS RankRegiaoHero,
+    Num(ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0))          AS RankCatNum,
+    ApplyMap('MAP_PDVKEY_CANAL', %ChavePDV, 'ND')            AS RankCanal,
+    ApplyMap('MAP_PRODKEY_COD', %ChaveProduto, '')           AS RankCodProduto,
+    VolumeTon                                                AS RankVolumeTon
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1
+  AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
+
+TMP_RANK_CANAL:
+LOAD
+    %RankGrupoCanal,
+    FirstSortedValue(RankCodProduto, -RankPDVs)              AS SKUTop,
+    Sum(RankVolumeTon) / RangeMax(1, Sum(RankPDVs))          AS TicketMedioTon
+RESIDENT TMP_RANK_BASE
+GROUP BY %RankGrupoCanal;
+
+TMP_RANK_REGIAO:
+LOAD
+    %RankGrupoRegiao,
+    FirstSortedValue(RankCodProduto, -RankPDVs)              AS SKUTopRegiao,
+    Sum(RankVolumeTon) / RangeMax(1, Sum(RankPDVs))          AS TicketMedioTonRegiao
+RESIDENT TMP_RANK_BASE
+GROUP BY %RankGrupoRegiao;
+
+MAP_SKU_TOP_CANAL:    MAPPING LOAD %RankGrupoCanal,  SKUTop               RESIDENT TMP_RANK_CANAL;
+MAP_TICKET_CANAL:     MAPPING LOAD %RankGrupoCanal,  TicketMedioTon       RESIDENT TMP_RANK_CANAL;
+MAP_SKU_TOP_REGIAO:   MAPPING LOAD %RankGrupoRegiao, SKUTopRegiao         RESIDENT TMP_RANK_REGIAO;
+MAP_TICKET_REGIAO:    MAPPING LOAD %RankGrupoRegiao, TicketMedioTonRegiao RESIDENT TMP_RANK_REGIAO;
+
+DROP TABLES TMP_RANK_BASE, TMP_RANK_CANAL, TMP_RANK_REGIAO;
+
+// -----------------------------------------------------------------------------
+// 5.2 Historico do PDV por categoria: "ele ja comprou isso antes"
+//     Vale mais recomendar um SKU que o PDV ja girou do que o campeao do canal.
+// -----------------------------------------------------------------------------
+TMP_HIST_BASE:
+LOAD
+    SubField(%ChaveDistPdvMes, '|', 1)                       AS HistDist,
+    SubField(%ChaveDistPdvMes, '|', 2)                       AS HistCNPJ,
+    Num(ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0))          AS HistCatNum,
+    ApplyMap('MAP_PRODKEY_COD', %ChaveProduto, '')           AS HistCodProduto,
+    %ChaveData                                               AS HistData
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1
+  AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
+
+TMP_HIST_CAT:
+LOAD
+    HistDist & '|' & HistCNPJ & '|' & HistCatNum             AS %HistKey,
+    FirstSortedValue(HistCodProduto, -HistData)              AS HistSKU,
+    Max(HistData)                                            AS HistUltimaData
+RESIDENT TMP_HIST_BASE
+GROUP BY HistDist & '|' & HistCNPJ & '|' & HistCatNum;
+
+MAP_HIST_SKU: MAPPING LOAD %HistKey, HistSKU RESIDENT TMP_HIST_CAT;
+MAP_HIST_FLAG: MAPPING LOAD %HistKey, 1      RESIDENT TMP_HIST_CAT;
+DROP TABLES TMP_HIST_CAT, TMP_HIST_BASE;
+
+// -----------------------------------------------------------------------------
+// 5.3 Fan-out: uma linha por categoria faltante
+// -----------------------------------------------------------------------------
+TMP_HERO_GAP:
+NOCONCATENATE
+LOAD
+    %ChaveDistPdvMes,
+    HeroDistribuidorID,
+    HeroCNPJ,
+    HeroAnoMes,
+    HeroRegiaoHero,
+    HeroQtdCategorias,
+    HeroCategoriasFaltantesQtd,
+    HeroVolumeTotalTon,
+    HeroCat1, HeroCat2, HeroCat3
+RESIDENT AGG_HERO_PDV_MES
+// PDV com pelo menos 1 categoria e no maximo 2 faltando: e onde a visita
+// converte. Quem nao comprou nada e problema de positivacao, nao de mix.
+WHERE HeroQtdCategorias >= 1 AND HeroQtdCategorias <= 2;
+
+JOIN (TMP_HERO_GAP)
+LOAD RecNo() AS OppHero_CatNum AUTOGENERATE 3;
+
+OPP_HERO:
+LOAD
+    %ChaveDistPdvMes,
+    OppHero_CNPJ,
+    OppHero_PDVFantasia,
+    OppHero_PDVCanal,
+    OppHero_AnoMes,
+    OppHero_CatNum,
+    OppHero_CategoriaFaltante,
+    OppHero_CategoriasFaltantesQtd,
+    OppHero_ConverteSozinho,
+    OppHero_SKURecomendado,
+    ApplyMap('MAP_PRODUTO_DESC', OppHero_SKURecomendado, OppHero_SKURecomendado) AS OppHero_SKURecomendadoDesc,
+    OppHero_MotivoRecomendacao,
+    Round(OppHero_VolumeEstimadoTon, 0.000001)               AS OppHero_VolumeEstimadoTon,
+    OppHero_GapDegrauPdvs,
+    OppHero_ValorDegrauTotal,
+    // Rateio honesto: o degrau paga X e faltam N PDVs Hero. Converter este PDV
+    // vale X/N - e so vale de verdade se os outros N-1 tambem forem convertidos.
+    Round(If(OppHero_ConverteSozinho = 1 AND OppHero_GapDegrauPdvs > 0,
+             OppHero_ValorDegrauTotal / OppHero_GapDegrauPdvs, 0), 0.01) AS OppHero_ValorPorConversao,
+    Round(OppHero_Score, 0.1)                                AS OppHero_Score,
+    If(OppHero_Score >= 75, 'Critico',
+    If(OppHero_Score >= 55, 'Alto',
+    If(OppHero_Score >= 35, 'Medio', 'Baixo')))              AS OppHero_Faixa
+;
+LOAD
+    *,
+    $(vScoreHeroPesoEsforco)   * If(OppHero_ConverteSozinho = 1, 1, 0.4)
+  + $(vScoreHeroPesoVolume)    * RangeMin(1, OppHero_VolumePdvTon / $(vHeroVolumeNormTon))
+  + $(vScoreHeroPesoAfinidade) * OppHero_TemHistorico                    AS OppHero_Score
+;
+LOAD
+    %ChaveDistPdvMes,
+    HeroCNPJ                                                 AS OppHero_CNPJ,
+    ApplyMap('MAP_PDV_FANTASIA', HeroCNPJ, 'PDV nao cadastrado') AS OppHero_PDVFantasia,
+    CanalPdv                                                 AS OppHero_PDVCanal,
+    HeroAnoMes                                               AS OppHero_AnoMes,
+    OppHero_CatNum,
+    ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|' & OppHero_CatNum,
+             'Cat ' & OppHero_CatNum)                        AS OppHero_CategoriaFaltante,
+    HeroCategoriasFaltantesQtd                               AS OppHero_CategoriasFaltantesQtd,
+    If(HeroCategoriasFaltantesQtd = 1, 1, 0)                 AS OppHero_ConverteSozinho,
+    HeroVolumeTotalTon                                       AS OppHero_VolumePdvTon,
+    TemHistorico                                             AS OppHero_TemHistorico,
+    // Prioridade da recomendacao: SKU que o PDV ja comprou > campeao do canal
+    // > campeao da regiao. Nunca devolve vazio.
+    If(TemHistorico = 1, SKUHistorico,
+       If(Len(SKUCanal) > 0, SKUCanal, SKURegiao))           AS OppHero_SKURecomendado,
+    If(TemHistorico = 1, 'Ja comprou este SKU antes',
+       If(Len(SKUCanal) > 0, 'Mais vendido no canal ' & CanalPdv,
+          'Mais vendido na regiao'))                         AS OppHero_MotivoRecomendacao,
+    If(Num(TicketCanal) > 0, TicketCanal, TicketRegiao)      AS OppHero_VolumeEstimadoTon,
+    Num(ApplyMap('MAP_PPT_GAPHERO',   HeroDistribuidorID & '|' & HeroAnoMes, 0)) AS OppHero_GapDegrauPdvs,
+    Num(ApplyMap('MAP_PPT_GANHOHERO', HeroDistribuidorID & '|' & HeroAnoMes, 0)) AS OppHero_ValorDegrauTotal
+;
+LOAD
+    *,
+    ApplyMap('MAP_PDV_CANAL', HeroCNPJ, 'ND')                                     AS CanalPdv,
+    ApplyMap('MAP_HIST_FLAG', HeroDistribuidorID & '|' & HeroCNPJ & '|' & OppHero_CatNum, 0) AS TemHistorico,
+    ApplyMap('MAP_HIST_SKU',  HeroDistribuidorID & '|' & HeroCNPJ & '|' & OppHero_CatNum, '') AS SKUHistorico,
+    ApplyMap('MAP_SKU_TOP_CANAL',
+             HeroRegiaoHero & '|' & OppHero_CatNum & '|' & ApplyMap('MAP_PDV_CANAL', HeroCNPJ, 'ND'), '') AS SKUCanal,
+    ApplyMap('MAP_SKU_TOP_REGIAO', HeroRegiaoHero & '|' & OppHero_CatNum, '')     AS SKURegiao,
+    ApplyMap('MAP_TICKET_CANAL',
+             HeroRegiaoHero & '|' & OppHero_CatNum & '|' & ApplyMap('MAP_PDV_CANAL', HeroCNPJ, 'ND'), 0)  AS TicketCanal,
+    ApplyMap('MAP_TICKET_REGIAO', HeroRegiaoHero & '|' & OppHero_CatNum, 0)       AS TicketRegiao
+RESIDENT TMP_HERO_GAP
+// Mantem apenas as categorias que REALMENTE faltam neste PDV
+WHERE Pick(OppHero_CatNum, HeroCat1, HeroCat2, HeroCat3) = 0;
+
+DROP TABLE TMP_HERO_GAP;
+
+LET vLinhasOppHero = NoOfRows('OPP_HERO');
+TRACE >> OPP_HERO: $(vLinhasOppHero) recomendacoes de SKU para completar mix;
+
+
+/* ========================================================================== */
+
+///$tab 10 - Section Access
+/* =============================================================================
+   SECTION ACCESS - SEGURANCA DE LINHA POR PERSONA
+   -----------------------------------------------------------------------------
+   Regra: o escopo de dados e resolvido pelo MOTOR QLIK, nunca pelo front-end.
+   Um distribuidor que manipule o request do mashup continua vendo apenas o
+   proprio CNPJ, porque a reducao acontece antes de qualquer hypercube existir.
+
+   Personas:
+     ADMIN         - Tirolez corporativo / NIQ. Ve tudo (campo de reducao vazio).
+     DIRETOR       - Ve tudo, sem direito de edicao.
+     COORDENADOR   - Ve todos os distribuidores da sua regiao.
+     EXECUTIVO     - Ve os distribuidores da sua carteira.
+     DISTRIBUIDOR  - Ve exclusivamente o proprio codigo.
+
+   Campo de reducao: DISTRIBUIDORID (maiusculo, obrigatorio pelo Qlik).
+   Linha com DISTRIBUIDORID vazio = sem reducao = ve tudo.
+   ============================================================================= */
+
+IF $(vAplicarSectionAccess) THEN
+
+    TRACE >> Aplicando Section Access;
+
+    STAR IS *;
+
+    // -------------------------------------------------------------------------
+    // Campo de reducao no modelo. Precisa ser maiusculo e existir em uma tabela
+    // de dados para que a reducao propague pelas associacoes.
+    // -------------------------------------------------------------------------
+    LEFT JOIN (DIM_DISTRIBUIDOR)
+    LOAD
+        DistribuidorID,
+        Upper(DistribuidorID) AS DISTRIBUIDORID
+    RESIDENT DIM_DISTRIBUIDOR;
+
+    // -------------------------------------------------------------------------
+    // 1. Distribuidores - cada um ve apenas o proprio codigo
+    // -------------------------------------------------------------------------
+    TMP_SA:
+    LOAD
+        'USER'                         AS ACCESS,
+        Upper(DistribuidorEmailPortal) AS USERID,
+        Upper(DistribuidorID)          AS DISTRIBUIDORID,
+        'DISTRIBUIDOR'                 AS PERSONA
+    RESIDENT DIM_DISTRIBUIDOR
+    WHERE Len(Trim(DistribuidorEmailPortal)) > 0;
+
+    // -------------------------------------------------------------------------
+    // 2. Executivos - carteira de distribuidores
+    // -------------------------------------------------------------------------
+    MAP_SA_EXEC_EMAIL:
+    MAPPING LOAD %ChaveExecutivo, ExecutivoEmail RESIDENT DIM_EXECUTIVO;
+
+    CONCATENATE (TMP_SA)
+    LOAD
+        'USER'                                                          AS ACCESS,
+        Upper(ApplyMap('MAP_SA_EXEC_EMAIL', %ChaveExecutivo, ''))       AS USERID,
+        Upper(DistribuidorID)                                           AS DISTRIBUIDORID,
+        'EXECUTIVO'                                                     AS PERSONA
+    RESIDENT DIM_DISTRIBUIDOR
+    WHERE Len(Trim(ApplyMap('MAP_SA_EXEC_EMAIL', %ChaveExecutivo, ''))) > 0;
+
+    // -------------------------------------------------------------------------
+    // 3. Coordenadores regionais - todos os distribuidores da regiao
+    // -------------------------------------------------------------------------
+    MAP_SA_COORD_EMAIL:
+    MAPPING LOAD %ChaveRegiao, RegiaoCoordenadorEmail RESIDENT DIM_REGIAO;
+
+    CONCATENATE (TMP_SA)
+    LOAD
+        'USER'                                                          AS ACCESS,
+        Upper(ApplyMap('MAP_SA_COORD_EMAIL', %ChaveRegiao, ''))         AS USERID,
+        Upper(DistribuidorID)                                           AS DISTRIBUIDORID,
+        'COORDENADOR'                                                   AS PERSONA
+    RESIDENT DIM_DISTRIBUIDOR
+    WHERE Len(Trim(ApplyMap('MAP_SA_COORD_EMAIL', %ChaveRegiao, ''))) > 0;
+
+    // -------------------------------------------------------------------------
+    // 4. Administradores e diretoria - reducao vazia = acesso total
+    // -------------------------------------------------------------------------
+    CONCATENATE (TMP_SA)
+    LOAD
+        ACCESS,
+        Upper(USERID) AS USERID,
+        DISTRIBUIDORID,
+        PERSONA
+    INLINE [
+ACCESS, USERID, DISTRIBUIDORID, PERSONA
+ADMIN, admin.ppt@tirolez.com.br,      , ADMIN
+ADMIN, arquitetura.ppt@nielseniq.com, , ADMIN
+USER,  diretoria.comercial@tirolez.com.br, , DIRETOR
+];
+
+    // -------------------------------------------------------------------------
+    // Aplicacao
+    // OMIT: o distribuidor nao precisa (e nao deve) enxergar o e-mail de portal
+    // dos demais nem a base de sell-in de terceiros. A reducao ja resolve o
+    // escopo; o OMIT reduz a superficie de exposicao de coluna.
+    // -------------------------------------------------------------------------
+    SECTION ACCESS;
+
+    SA_PERMISSOES:
+    LOAD
+        ACCESS,
+        USERID,
+        DISTRIBUIDORID,
+        PERSONA
+    RESIDENT TMP_SA;
+
+    SECTION APPLICATION;
+
+    DROP TABLE TMP_SA;
+
+    LET vQtdSA = NoOfRows('SA_PERMISSOES');
+    TRACE >> Section Access: $(vQtdSA) permissoes carregadas;
+
+ELSE
+
+    TRACE >> Section Access DESLIGADO (vAplicarSectionAccess = 0). Nao promover assim para PRD.;
+
+END IF;
+
+
+/* ========================================================================== */
+
+///$tab 99 - Finalize
+/* =============================================================================
+   QUALIDADE, TAGS, PERSISTENCIA E LOG
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 1. Testes de qualidade que rodam a cada carga
+//    Falha aqui derruba a carga. Numero errado que chega na tela e pior do que
+//    carga que nao roda - especialmente quando o numero define pagamento.
+// -----------------------------------------------------------------------------
+
+// 1.1 Toda venda tem chave Hero resolvida
+TMP_QA1:
+LOAD Count(FlagVenda) AS QtdSemHero
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1 AND Len(Trim(%ChaveHero)) = 0;
+LET vQA1 = Peek('QtdSemHero', 0, 'TMP_QA1');
+DROP TABLE TMP_QA1;
+
+IF $(vQA1) > 0 THEN
+    CONCATENATE (QA_REJEITADOS)
+    LOAD 'FACT_SELL_OUT' AS QA_Tabela,
+         'Linha de venda sem %ChaveHero resolvida' AS QA_Motivo,
+         '-' AS QA_Valor, $(vQA1) AS QA_Ocorrencias AUTOGENERATE 1;
+    TRACE !! ALERTA: $(vQA1) linhas de venda sem chave Hero;
+END IF;
+
+// 1.2 Subcategorias de produto que NAO existem na composicao Hero.
+//     Nao e erro (existem SKUs fora do Mix), mas uma subcategoria Hero grafada
+//     errado apareceria aqui - e e assim que o Mix Hero quebra em silencio.
+TMP_QA2:
+LOAD
+    ProdutoSubcategoria,
+    Count(CodProduto) AS QtdSkus
+RESIDENT DIM_PRODUTO
+WHERE ApplyMap('MAP_HERO_CATNUM', 'SP|' & ProdutoSubcategoria, 0) = 0
+  AND ApplyMap('MAP_HERO_CATNUM', 'DEMAIS|' & ProdutoSubcategoria, 0) = 0
+GROUP BY ProdutoSubcategoria;
+
+CONCATENATE (QA_REJEITADOS)
+LOAD
+    'DIM_PRODUTO'                                  AS QA_Tabela,
+    'Subcategoria fora da composicao Hero (verificar grafia)' AS QA_Motivo,
+    ProdutoSubcategoria                            AS QA_Valor,
+    QtdSkus                                        AS QA_Ocorrencias
+RESIDENT TMP_QA2;
+DROP TABLE TMP_QA2;
+
+// 1.3 Premiacao nunca pode passar de 2% do sell-in
+TMP_QA3:
+LOAD Count(%ChaveDistMes) AS QtdEstouro
+RESIDENT FACT_PPT_MENSAL
+WHERE PremioTotal > PremioPotencialTotal + 0.01;
+LET vQA3 = Peek('QtdEstouro', 0, 'TMP_QA3');
+DROP TABLE TMP_QA3;
+
+IF $(vQA3) > 0 THEN
+    TRACE !! FALHA CRITICA: $(vQA3) competencias com premio acima do teto de 2%;
+    // Em PRD, descomente para abortar a carga:
+    // EXIT SCRIPT;
+END IF;
+
+// 1.4 Atingimento negativo ou meta zerada
+TMP_QA4:
+LOAD Count(%ChaveDistMes) AS QtdMetaZero
+RESIDENT FACT_PPT_MENSAL
+WHERE MetaPositivacao <= 0 OR MetaVolumeTon <= 0 OR MetaMixHero <= 0;
+LET vQA4 = Peek('QtdMetaZero', 0, 'TMP_QA4');
+DROP TABLE TMP_QA4;
+
+IF $(vQA4) > 0 THEN
+    CONCATENATE (QA_REJEITADOS)
+    LOAD 'FACT_PPT_MENSAL' AS QA_Tabela,
+         'Competencia sem meta valida (divisao por zero evitada)' AS QA_Motivo,
+         '-' AS QA_Valor, $(vQA4) AS QA_Ocorrencias AUTOGENERATE 1;
+END IF;
+
+// -----------------------------------------------------------------------------
+// 2. Tags de campo - organiza o seletor de campos e o Insight Advisor
+// -----------------------------------------------------------------------------
+TAG FIELDS %ChaveData, %ChavePDV, %ChaveDistribuidor, %ChaveProduto,
+           %ChaveHero, %ChaveRegiao, %ChaveExecutivo,
+           %ChaveDistMes, %ChaveDistPdvMes
+WITH '$hidden', '$key';
+
+TAG FIELDS MetaPositivacao, MetaVolumeTon, MetaMixHero WITH '$meta-ppt';
+TAG FIELDS RealPositivacao, RealVolumeTon, RealMixHero WITH '$realizado-ppt';
+TAG FIELDS PremioPositivacao, PremioVolume, PremioMixHero, PremioTotal WITH '$premiacao';
+TAG FIELD  Data WITH '$date';
+TAG FIELD  AnoMes WITH '$date';
+
+// -----------------------------------------------------------------------------
+// 3. Persistencia da camada model (opcional)
+// -----------------------------------------------------------------------------
+IF $(vGravarQVD) THEN
+
+    TRACE >> Gravando QVDs em $(vPastaQVD);
+
+    STORE DIM_DATA          INTO [$(vPastaQVD)DIM_DATA.qvd]          (qvd);
+    STORE DIM_PDV           INTO [$(vPastaQVD)DIM_PDV.qvd]           (qvd);
+    STORE DIM_DISTRIBUIDOR  INTO [$(vPastaQVD)DIM_DISTRIBUIDOR.qvd]  (qvd);
+    STORE DIM_PRODUTO       INTO [$(vPastaQVD)DIM_PRODUTO.qvd]       (qvd);
+    STORE DIM_REGIAO        INTO [$(vPastaQVD)DIM_REGIAO.qvd]        (qvd);
+    STORE DIM_EXECUTIVO     INTO [$(vPastaQVD)DIM_EXECUTIVO.qvd]     (qvd);
+    STORE DIM_HERO          INTO [$(vPastaQVD)DIM_HERO.qvd]          (qvd);
+    STORE FACT_SELL_OUT     INTO [$(vPastaQVD)FACT_SELL_OUT.qvd]     (qvd);
+    STORE AGG_HERO_PDV_MES  INTO [$(vPastaQVD)AGG_HERO_PDV_MES.qvd]  (qvd);
+    STORE OPP_POSITIVACAO   INTO [$(vPastaQVD)OPP_POSITIVACAO.qvd]   (qvd);
+    STORE OPP_RECUPERACAO   INTO [$(vPastaQVD)OPP_RECUPERACAO.qvd]   (qvd);
+    STORE OPP_HERO          INTO [$(vPastaQVD)OPP_HERO.qvd]          (qvd);
+
+    // Livro-razao da premiacao versionado por execucao: auditoria de mes pago
+    STORE FACT_PPT_MENSAL   INTO [$(vPastaQVD)FACT_PPT_MENSAL.qvd]   (qvd);
+    STORE FACT_PPT_MENSAL   INTO [$(vPastaQVD)audit/FACT_PPT_MENSAL_$(vExecID).qvd] (qvd);
+
+END IF;
+
+// -----------------------------------------------------------------------------
+// 4. Log de execucao (ilha - visivel no painel de administracao do app)
+// -----------------------------------------------------------------------------
+LOG_CARGA:
+LOAD
+    '$(vExecID)'                          AS LogExecID,
+    Timestamp('$(vExecInicio)')           AS LogInicio,
+    Timestamp(Now())                      AS LogFim,
+    Interval(Now() - '$(vExecInicio)', 'hh:mm:ss') AS LogDuracao,
+    $(vUseMockData)                       AS LogModoMock,
+    $(vAplicarSectionAccess)              AS LogSectionAccess,
+    $(vMesesHistorico)                    AS LogMesesHistorico,
+    '$(vDataInicio)'                      AS LogJanelaInicio,
+    '$(vDataFim)'                         AS LogJanelaFim
+AUTOGENERATE 1;
+
+LEFT JOIN (LOG_CARGA)
+LOAD
+    '$(vExecID)'                          AS LogExecID,
+    $(vLinhasFatoTotal)                   AS LogLinhasFato,
+    $(vLinhasHero)                        AS LogLinhasHero,
+    $(vLinhasPPT)                         AS LogLinhasPPT,
+    $(vLinhasOppPos)                      AS LogLinhasOppPositivacao,
+    $(vLinhasOppRec)                      AS LogLinhasOppRecuperacao,
+    $(vLinhasOppHero)                     AS LogLinhasOppHero
+AUTOGENERATE 1;
+
+TRACE ================================================================;
+TRACE  PPT TIROLEZ - carga concluida;
+TRACE   Fato ................ $(vLinhasFatoTotal) linhas;
+TRACE   Hero PDV x mes ...... $(vLinhasHero) linhas;
+TRACE   Competencias PPT .... $(vLinhasPPT) linhas;
+TRACE   Oport. positivacao .. $(vLinhasOppPos) linhas;
+TRACE   Oport. recuperacao .. $(vLinhasOppRec) linhas;
+TRACE   Oport. Hero ......... $(vLinhasOppHero) linhas;
+TRACE ================================================================;

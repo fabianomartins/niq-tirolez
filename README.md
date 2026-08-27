@@ -51,7 +51,9 @@ Escalonamento por KPI: `≥ 90% → 50%` · `≥ 95% → 70%` · `≥ 100% → 1
 │   │   ├── 08-fato-ppt-mensal.qvs
 │   │   ├── 09-oportunidades.qvs  # Positivação + Hero + Recuperação
 │   │   ├── 10-section-access.qvs
-│   │   └── 99-finalize.qvs
+│   │   ├── 99-finalize.qvs
+│   │   └── ppt-script-completo.qvs   # DERIVADO: as 12 abas em um arquivo só,
+│   │                                 # para colar de uma vez no editor de carga
 │   ├── master-items/             # Medidas, dimensões, variáveis, bookmarks (JSON)
 │   └── tools/deploy-master-items.mjs   # Deploy via Qlik Cloud REST/Engine API
 │
@@ -66,8 +68,11 @@ Escalonamento por KPI: `≥ 90% → 50%` · `≥ 95% → 70%` · `≥ 100% → 1
 ### 1. Qlik Cloud
 
 1. Crie um app `PPT — Programa Por Performance Tirolez`.
-2. Cole o conteúdo de `qlik/script/00-main.qvs` na aba **Main** do editor de carga.
-3. Cole cada `NN-*.qvs` restante em uma aba homônima (o `00-main` documenta a ordem).
+2. **Preparar → Editor de carregamento de dados**, selecione tudo na aba Main e cole
+   `qlik/script/ppt-script-completo.qvs` por cima. As linhas `///$tab` são a marcação de
+   aba do Qlik — o script roda igual em uma aba só, e ao reabrir o editor o Qlik
+   normalmente re-divide nas 12 abas.
+   *Alternativa:* colar cada `NN-*.qvs` em uma aba homônima, na ordem que `00-main` documenta.
 4. Para demo/QA sem fontes: mantenha `SET vUseMockData = 1;` em `01-variaveis.qvs` — o script
    gera uma base sintética consistente (24 meses, ~40 distribuidores, ~9k PDVs).
 5. Para produção: `SET vUseMockData = 0;` e configure as conexões em `02-fontes.qvs`.
