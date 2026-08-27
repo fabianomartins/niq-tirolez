@@ -6,6 +6,13 @@ abaixo tem resultado esperado estável.
 
 Severidade: **🔴 Bloqueia release** · **🟡 Corrige antes do go-live** · **🟢 Melhoria**
 
+> **Sobre QA-06C e QA-06D.** `ApplyMap(mapa, chave, PADRÃO)` é uma falha silenciosa por
+> construção: chave que não casa devolve o padrão e a carga termina limpa. Uma divergência de
+> tipo (`RegiaoID` numérico no `INLINE` × `Text(RegiaoID)` no consumidor) fez toda a composição
+> Hero de São Paulo virar `DEMAIS` sem um único erro no log — o diferencial do programa
+> desapareceu em silêncio. Os guardas na aba `04 - Dimensoes` usam um **sentinela** no lugar do
+> padrão e abortam a carga no miss.
+>
 > **Sobre QA-06B.** Expansão de dólar (`$(var)`) não é visível em revisão de código: o texto
 > só existe em tempo de execução. Um `LET` que avalia `MonthEnd()` guarda `46265,99999988` em
 > locale pt-BR, e a vírgula vira separador de argumento dentro da expressão. O lint em
@@ -24,6 +31,8 @@ Severidade: **🔴 Bloqueia release** · **🟡 Corrige antes do go-live** · **
 | QA-05 | Pesos do script = pesos das variáveis do app | Comparar `01-variaveis.qvs` com `variables.json` e `lib/status.ts` | 0,0070 / 0,0070 / 0,0060 nos três | 🔴 |
 | QA-06 | Grão do fato é único por documento+SKU+dia | `Count(FACT_SELL_OUT) = Count(DISTINCT NumeroDocumento & '\|' & %ChaveProduto)` | igual | 🟡 |
 | QA-06B | Nenhum `LET` numérico expandido em código sem formato fixo | `node qlik/tools/build-script.mjs --check` | Lint OK | 🔴 |
+| QA-06C | Nenhum `ApplyMap` cai no valor padrão por divergência de tipo de chave | Log de carga | `Guarda de mapa OK`; carga aborta se houver miss | 🔴 |
+| QA-06D | Composição Hero de SP é realmente exercitada | `Count(DISTINCT OppHero_CategoriaFaltante)` | **4** rótulos (Fatiados **e** Manteiga) | 🔴 |
 | QA-07 | Subcategoria Hero grafada corretamente | Abrir `QA_REJEITADOS`, filtrar motivo "Subcategoria fora da composição Hero" | Nenhuma das 10 subcategorias Hero na lista | 🔴 |
 | QA-08 | `DIM_PDV` sem CNPJ duplicado | `Count(DIM_PDV) = Count(DISTINCT CNPJ)` | igual | 🔴 |
 | QA-09 | Toda venda tem chave Hero resolvida | Log de carga | `vQA1 = 0` | 🟡 |

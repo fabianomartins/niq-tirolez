@@ -19,10 +19,10 @@ LOAD
     Lower(RegiaoCoordenadorEmail) AS RegiaoCoordenadorEmail
 RESIDENT SRC_REGIAO;
 
-MAP_REGIAO_HERO_FINAL: MAPPING LOAD RegiaoID, RegiaoHero RESIDENT DIM_REGIAO;
-MAP_REGIAO_NOME:       MAPPING LOAD RegiaoID, RegiaoNome RESIDENT DIM_REGIAO;
-
-DROP TABLE SRC_REGIAO;
+// Text() nos dois lados do mapa. Chave texto x chave numerica nao casa e o
+// ApplyMap devolve o padrao sem erro - ver o guarda no fim desta aba.
+MAP_REGIAO_HERO_FINAL: MAPPING LOAD Text(RegiaoID), RegiaoHero RESIDENT DIM_REGIAO;
+MAP_REGIAO_NOME:       MAPPING LOAD Text(RegiaoID), RegiaoNome RESIDENT DIM_REGIAO;
 
 // -----------------------------------------------------------------------------
 // DIM_EXECUTIVO
@@ -34,7 +34,7 @@ LOAD
     ExecutivoNome,
     Lower(ExecutivoEmail)          AS ExecutivoEmail,
     ExecutivoCargo,
-    ApplyMap('MAP_REGIAO_NOME', RegiaoID, 'Nao informada') AS ExecutivoRegiaoNome
+    ApplyMap('MAP_REGIAO_NOME', Text(RegiaoID), 'Nao informada') AS ExecutivoRegiaoNome
 RESIDENT SRC_EXECUTIVO;
 
 DROP TABLE SRC_EXECUTIVO;
@@ -60,12 +60,65 @@ LOAD
     If(DistribuidorStatus = 'Ativo', 1, 0)               AS FlagDistribuidorElegivel,
     // Composicao Hero herdada da regiao - fica no distribuidor porque e ele
     // quem determina qual regra vale para as vendas dele
-    ApplyMap('MAP_REGIAO_HERO_FINAL', RegiaoID, 'DEMAIS') AS DistribuidorRegiaoHero
+    ApplyMap('MAP_REGIAO_HERO_FINAL', Text(RegiaoID), 'DEMAIS') AS DistribuidorRegiaoHero
 RESIDENT SRC_DISTRIBUIDOR;
 
 // Mapas para derivar a chave Hero na tabela fato
 MAP_DIST_REGIAOHERO: MAPPING LOAD DistribuidorID, DistribuidorRegiaoHero RESIDENT DIM_DISTRIBUIDOR;
 MAP_DIST_NOME:       MAPPING LOAD DistribuidorID, DistribuidorNome       RESIDENT DIM_DISTRIBUIDOR;
+
+
+/* =============================================================================
+   GUARDA DE MAPA
+   -----------------------------------------------------------------------------
+   ApplyMap(mapa, chave, PADRAO) e uma falha silenciosa por construcao: quando a
+   chave nao casa, ele devolve o padrao e a carga segue limpa. Foi exatamente
+   assim que a composicao Hero de Sao Paulo sumiu - todo distribuidor virou
+   'DEMAIS' e nenhum erro apareceu no log.
+
+   O teste usa um SENTINELA no lugar do padrao. Se ele voltar, a chave nao casou
+   e a carga aborta: numero errado em premiacao e pior que carga que nao roda.
+   Ver docs/07-qa-checklist.md QA-06C.
+   ============================================================================= */
+TMP_QA_MAPA_REGIAO:
+LOAD Count(DistribuidorID) AS QtdSemRegiao
+RESIDENT SRC_DISTRIBUIDOR
+WHERE ApplyMap('MAP_REGIAO_HERO_FINAL', Text(RegiaoID), '@@SEM_MATCH@@') = '@@SEM_MATCH@@';
+
+LET vQtdSemRegiao = Num(Alt(Peek('QtdSemRegiao', 0, 'TMP_QA_MAPA_REGIAO'), 0), '0');
+DROP TABLE TMP_QA_MAPA_REGIAO;
+
+IF $(vQtdSemRegiao) > 0 THEN
+    TRACE !! FALHA CRITICA: $(vQtdSemRegiao) distribuidores com RegiaoID que nao casa com DIM_REGIAO.;
+    TRACE !! A composicao Hero cairia para DEMAIS em silencio. Verifique o TIPO da chave RegiaoID.;
+    EXIT SCRIPT;
+END IF;
+
+/* A mesma divergencia de tipo quebrava a ligacao do modelo estrela:
+   %ChaveRegiao = AutoNumberHash128(RegiaoID) era calculada sobre um NUMERO em
+   DIM_REGIAO e sobre um TEXTO em DIM_DISTRIBUIDOR. Hashes diferentes, chave
+   orfa, e a regiao simplesmente nao associava ao distribuidor.
+   Integridade referencial de chave gerada tem que ser testada, nao presumida. */
+MAP_QA_CHAVE_REGIAO:
+MAPPING LOAD %ChaveRegiao, 1 RESIDENT DIM_REGIAO;
+
+TMP_QA_LINK_REGIAO:
+LOAD Count(DistribuidorID) AS QtdOrfaos
+RESIDENT DIM_DISTRIBUIDOR
+WHERE ApplyMap('MAP_QA_CHAVE_REGIAO', %ChaveRegiao, 0) = 0;
+
+LET vQtdOrfaos = Num(Alt(Peek('QtdOrfaos', 0, 'TMP_QA_LINK_REGIAO'), 0), '0');
+DROP TABLE TMP_QA_LINK_REGIAO;
+
+IF $(vQtdOrfaos) > 0 THEN
+    TRACE !! FALHA CRITICA: $(vQtdOrfaos) distribuidores com %ChaveRegiao orfa em DIM_REGIAO.;
+    TRACE !! A regiao nao associa ao distribuidor. Verifique o TIPO do campo antes do AutoNumberHash128.;
+    EXIT SCRIPT;
+END IF;
+
+TRACE >> Guarda de mapa OK: composicao Hero e chave de regiao resolvidas para todos os distribuidores.;
+
+DROP TABLE SRC_REGIAO;
 
 DROP TABLE SRC_DISTRIBUIDOR;
 

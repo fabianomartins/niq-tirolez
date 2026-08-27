@@ -164,7 +164,19 @@ IF $(vUseMockData) THEN
     // -------------------------------------------------------------------------
     // B1. Regioes
     // -------------------------------------------------------------------------
+    /* O INLINE traz RegiaoID como NUMERO. Os consumidores (SRC_DISTRIBUIDOR,
+       SRC_EXECUTIVO) geram RegiaoID com Text(). ApplyMap de chave texto contra
+       chave numerica NAO casa e devolve o valor padrao - em silencio.
+       Foi assim que a composicao Hero de SP deixou de ser aplicada. O Text()
+       abaixo alinha o tipo com o bloco de producao, que ja usa Text(REGIAO_ID). */
     SRC_REGIAO:
+    LOAD
+        Text(RegiaoID)  AS RegiaoID,
+        RegiaoNome,
+        RegiaoUF,
+        RegiaoHero,
+        RegiaoCoordenadorEmail
+    ;
     LOAD * INLINE [
 RegiaoID, RegiaoNome, RegiaoUF, RegiaoHero, RegiaoCoordenadorEmail
 1, Sao Paulo, SP, SP, coord.sp@tirolez.com.br
@@ -326,7 +338,7 @@ TZ-CHE-150, Cheddar Fatiado 150g,             Fatiados,  Cheddar Fatiado,     15
 
     MAP_DIST_REGIAO:  MAPPING LOAD DistribuidorID, RegiaoID RESIDENT SRC_DISTRIBUIDOR;
 
-    MAP_REGIAO_HERO:  MAPPING LOAD RegiaoID, RegiaoHero RESIDENT SRC_REGIAO;
+    MAP_REGIAO_HERO:  MAPPING LOAD Text(RegiaoID), RegiaoHero RESIDENT SRC_REGIAO;
 
     // -------------------------------------------------------------------------
     // B5. PDVs
@@ -340,7 +352,7 @@ TZ-CHE-150, Cheddar Fatiado 150g,             Fatiados,  Cheddar Fatiado,     15
         qPdv,
         DistribuidorID,
         RegiaoID,
-        ApplyMap('MAP_REGIAO_HERO', RegiaoID, 'DEMAIS')                    AS RegiaoHero,
+        ApplyMap('MAP_REGIAO_HERO', Text(RegiaoID), 'DEMAIS')              AS RegiaoHero,
         Text(Num(20000000 + iPdv * 7, '00000000')) & '0001'
             & Text(Num(Mod(iPdv * 31, 90) + 10, '00'))                     AS CNPJ,
         RegiaoID & '|' & (Floor($(vHash(iPdv, 3.31)) * 5) + 1)             AS %MockCidadeKey,
