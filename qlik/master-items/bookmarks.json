@@ -1,0 +1,75 @@
+{
+  "_doc": "Bookmarks de partida. Cada um é um ponto de entrada de trabalho, não um recorte analítico: abre a tela já filtrada no conjunto de PDVs ou distribuidores em que alguém precisa agir hoje.",
+
+  "bookmarks": [
+    {
+      "id": "PPT_BM_MES_CORRENTE",
+      "title": "Mês corrente",
+      "description": "Ponto de partida padrão de todas as telas. Aplicado automaticamente no load do mashup.",
+      "selections": [
+        { "field": "FlagMesAtual", "values": [1] }
+      ],
+      "sheetId": null,
+      "applyLayoutState": false
+    },
+    {
+      "id": "PPT_BM_MES_ANTERIOR_FECHADO",
+      "title": "Último mês fechado",
+      "description": "Competência já apurada e paga — visão de conferência e auditoria de premiação.",
+      "selections": [
+        { "field": "OffsetMes", "values": [-1] }
+      ]
+    },
+    {
+      "id": "PPT_BM_RISCO_ALTO",
+      "title": "Distribuidores em risco",
+      "description": "Projeção aponta ao menos um KPI fechando abaixo de 90%. É a fila de trabalho do Executivo na segunda-feira.",
+      "selections": [
+        { "field": "FlagMesAtual", "values": [1] },
+        { "field": "PPT_StatusRisco", "values": ["Risco alto"] }
+      ]
+    },
+    {
+      "id": "PPT_BM_HERO_FALTA1",
+      "title": "Hero — falta 1 categoria",
+      "description": "Conversão mais barata do programa: uma visita, um SKU, +1 PDV Hero.",
+      "selections": [
+        { "field": "FlagMesAtual", "values": [1] },
+        { "field": "HeroStatus", "values": ["Falta 1"] }
+      ]
+    },
+    {
+      "id": "PPT_BM_POSITIVACAO_CRITICA",
+      "title": "Positivação — prioridade crítica",
+      "description": "PDVs que sumiram no mês e têm o maior score de recuperação.",
+      "selections": [
+        { "field": "FlagMesAtual", "values": [1] },
+        { "field": "OppPos_Faixa", "values": ["Critico"] }
+      ]
+    },
+    {
+      "id": "PPT_BM_QUEDA_RELEVANTE",
+      "title": "Clientes em queda",
+      "description": "Compraram, mas abaixo da própria média dos 3 meses. Prioridade Crítico e Alto.",
+      "selections": [
+        { "field": "FlagMesAtual", "values": [1] },
+        { "field": "OppRec_Faixa", "values": ["Critico", "Alto"] }
+      ]
+    },
+    {
+      "id": "PPT_BM_SP",
+      "title": "São Paulo (composição Hero própria)",
+      "description": "Recorte da região com Categoria 3 = Fatiados. Útil para validar a regra regional.",
+      "selections": [
+        { "field": "RegiaoHero", "values": ["SP"] }
+      ]
+    },
+    {
+      "id": "PPT_BM_QA_AUDITORIA",
+      "title": "QA — auditoria de carga",
+      "description": "Sem seleção de negócio; abre o painel de qualidade (QA_REJEITADOS e LOG_CARGA).",
+      "selections": [],
+      "clearAll": true
+    }
+  ]
+}

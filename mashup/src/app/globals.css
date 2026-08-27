@@ -1,0 +1,40 @@
+:root {
+  --font-ui: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --ppt-shell-header: 60px;
+  --ppt-shell-sidebar: 236px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabelas largas nunca podem empurrar o body para o lado. */
+.ppt-scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Cartão de KPI: a borda esquerda carrega a cor de status. */
+.ppt-kpi-card {
+  position: relative;
+  overflow: hidden;
+}
+.ppt-kpi-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--ppt-status-color, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

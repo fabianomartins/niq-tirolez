@@ -1,0 +1,140 @@
+{
+  "_doc": "Dimensões mestre do PPT Tirolez. Drill-downs desenhados para a navegação de execução comercial: sempre terminam em um objeto acionável (PDV ou SKU).",
+
+  "dimensions": [
+    {
+      "id": "PPT_D_HIERARQUIA_COMERCIAL",
+      "title": "Hierarquia Comercial",
+      "description": "Região → Executivo → Distribuidor → PDV. O caminho que o Coordenador percorre para achar onde atuar.",
+      "grouping": "H",
+      "fields": ["RegiaoNome", "ExecutivoNome", "DistribuidorNome", "PDVFantasia"],
+      "labels": ["Região", "Executivo", "Distribuidor", "PDV"],
+      "tags": ["hierarquia", "executivo"]
+    },
+    {
+      "id": "PPT_D_CALENDARIO",
+      "title": "Calendário",
+      "description": "Ano → Trimestre → Mês → Dia.",
+      "grouping": "H",
+      "fields": ["Ano", "Trimestre", "AnoMesLabel", "Data"],
+      "labels": ["Ano", "Trimestre", "Mês", "Dia"],
+      "tags": ["tempo"]
+    },
+    {
+      "id": "PPT_D_PRODUTO",
+      "title": "Produto",
+      "description": "Categoria → Subcategoria → SKU. A subcategoria é o nível em que a regra Hero opera.",
+      "grouping": "H",
+      "fields": ["ProdutoCategoria", "ProdutoSubcategoria", "ProdutoDescricao"],
+      "labels": ["Categoria", "Subcategoria", "SKU"],
+      "tags": ["produto", "hero"]
+    },
+    {
+      "id": "PPT_D_DISTRIBUIDOR",
+      "title": "Distribuidor",
+      "grouping": "N",
+      "fields": ["DistribuidorNome"],
+      "labels": ["Distribuidor"],
+      "tags": ["dimensao-base"]
+    },
+    {
+      "id": "PPT_D_REGIAO",
+      "title": "Região",
+      "grouping": "N",
+      "fields": ["RegiaoNome"],
+      "labels": ["Região"],
+      "tags": ["dimensao-base"]
+    },
+    {
+      "id": "PPT_D_EXECUTIVO",
+      "title": "Executivo",
+      "grouping": "N",
+      "fields": ["ExecutivoNome"],
+      "labels": ["Executivo"],
+      "tags": ["dimensao-base", "executivo"]
+    },
+    {
+      "id": "PPT_D_PDV",
+      "title": "PDV",
+      "grouping": "N",
+      "fields": ["PDVFantasia"],
+      "labels": ["PDV"],
+      "tags": ["dimensao-base", "acionavel"]
+    },
+    {
+      "id": "PPT_D_CANAL",
+      "title": "Canal",
+      "grouping": "N",
+      "fields": ["PDVCanal"],
+      "labels": ["Canal"],
+      "tags": ["dimensao-base"]
+    },
+    {
+      "id": "PPT_D_CATEGORIA_HERO",
+      "title": "Categoria Hero",
+      "description": "As 3 categorias que compõem o Mix Hero. O conteúdo da Categoria 3 muda entre SP e demais regiões.",
+      "grouping": "N",
+      "fields": ["CategoriaHero"],
+      "labels": ["Categoria Hero"],
+      "tags": ["hero"]
+    },
+    {
+      "id": "PPT_D_STATUS_HERO",
+      "title": "Status Hero do PDV",
+      "description": "Completo / Falta 1 / Falta 2+ / Sem compra Hero. É a dimensão da batalha naval.",
+      "grouping": "N",
+      "fields": ["HeroStatus"],
+      "labels": ["Status Hero"],
+      "tags": ["hero", "acionavel"]
+    },
+    {
+      "id": "PPT_D_FAIXA_ATINGIMENTO",
+      "title": "Faixa de Atingimento",
+      "description": "Dimensão calculada que classifica o distribuidor-mês nas quatro faixas do programa. Usada para colorir a tabela e o mapa.",
+      "grouping": "N",
+      "calculated": true,
+      "fields": [
+        "=If(AtingMedio >= 1, '4. Meta atingida (100%)', If(AtingMedio >= 0.95, '3. Faixa 70% (95-99%)', If(AtingMedio >= 0.90, '2. Faixa 50% (90-94%)', '1. Sem premiação (<90%)')))"
+      ],
+      "labels": ["Faixa de Atingimento"],
+      "tags": ["ppt", "atingimento"]
+    },
+    {
+      "id": "PPT_D_STATUS_RISCO",
+      "title": "Status de Risco",
+      "description": "Classificação pela PROJEÇÃO de fechamento, não pelo realizado.",
+      "grouping": "N",
+      "fields": ["PPT_StatusRisco"],
+      "labels": ["Status de Risco"],
+      "tags": ["executivo", "risco"]
+    },
+    {
+      "id": "PPT_D_FAIXA_OPORTUNIDADE",
+      "title": "Prioridade da Oportunidade",
+      "grouping": "N",
+      "fields": ["OppPos_Faixa"],
+      "labels": ["Prioridade"],
+      "tags": ["oportunidade", "acionavel"]
+    },
+    {
+      "id": "PPT_D_PORTE_PDV",
+      "title": "Porte do PDV",
+      "description": "Dimensão calculada por volume médio no período selecionado. Segmenta o esforço de visita.",
+      "grouping": "N",
+      "calculated": true,
+      "fields": [
+        "=Aggr(If(Sum({<FlagVenda={1}>} VolumeTon) >= 1, 'A - Acima de 1t', If(Sum({<FlagVenda={1}>} VolumeTon) >= 0.4, 'B - 400kg a 1t', If(Sum({<FlagVenda={1}>} VolumeTon) >= 0.1, 'C - 100 a 400kg', 'D - Até 100kg'))), %ChavePDV)"
+      ],
+      "labels": ["Porte do PDV"],
+      "tags": ["pdv", "segmentacao"]
+    },
+    {
+      "id": "PPT_D_MES",
+      "title": "Mês",
+      "grouping": "N",
+      "fields": ["AnoMesLabel"],
+      "labels": ["Mês"],
+      "tags": ["tempo"]
+    }
+  ]
+}

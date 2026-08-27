@@ -1,0 +1,129 @@
+{
+  "_doc": "Variáveis do app PPT. As de negócio (pesos e degraus) espelham qlik/script/01-variaveis.qvs — alterar o programa exige mudar os DOIS lugares, e o teste QA-05 verifica que continuam iguais.",
+
+  "variables": [
+    {
+      "name": "vPesoPositivacao",
+      "definition": "0.0070",
+      "comment": "Peso do KPI Positivação sobre o sell-in (0,70%)",
+      "tags": ["ppt", "regra"]
+    },
+    {
+      "name": "vPesoVolume",
+      "definition": "0.0070",
+      "comment": "Peso do KPI Volume Sell Out sobre o sell-in (0,70%)",
+      "tags": ["ppt", "regra"]
+    },
+    {
+      "name": "vPesoMixHero",
+      "definition": "0.0060",
+      "comment": "Peso do KPI Mix Hero sobre o sell-in (0,60%)",
+      "tags": ["ppt", "regra"]
+    },
+    {
+      "name": "vPesoTotal",
+      "definition": "0.0200",
+      "comment": "Teto do programa: 2% do sell-in mensal",
+      "tags": ["ppt", "regra"]
+    },
+    {
+      "name": "vDegrau1",
+      "definition": "0.90",
+      "comment": "Primeiro degrau: >= 90% paga 50%",
+      "tags": ["ppt", "regra"]
+    },
+    {
+      "name": "vDegrau2",
+      "definition": "0.95",
+      "comment": "Segundo degrau: >= 95% paga 70%",
+      "tags": ["ppt", "regra"]
+    },
+    {
+      "name": "vDegrau3",
+      "definition": "1.00",
+      "comment": "Terceiro degrau: >= 100% paga 100%",
+      "tags": ["ppt", "regra"]
+    },
+
+    {
+      "name": "vSetRealizado",
+      "definition": "{<FlagVenda={1}>}",
+      "comment": "Set obrigatório em qualquer medida sobre FACT_SELL_OUT — exclui as linhas-esqueleto",
+      "tags": ["set-analysis", "obrigatorio"]
+    },
+    {
+      "name": "vSetMesAtual",
+      "definition": "{<FlagMesAtual={1}>}",
+      "comment": "Restringe ao mês corrente independentemente da seleção de data",
+      "tags": ["set-analysis"]
+    },
+    {
+      "name": "vSetMesAnterior",
+      "definition": "{<AnoMesNum={\"$(=Num(Year(AddMonths(Today(),-1))*100+Month(AddMonths(Today(),-1))))\"}, Data=, AnoMes=, Ano=, Mes=>}",
+      "comment": "Mês anterior fechado, ignorando seleção de data",
+      "tags": ["set-analysis", "comparativo"]
+    },
+    {
+      "name": "vSetU3M",
+      "definition": "{<AnoMesNum={\">=$(=Num(Year(AddMonths(Today(),-3))*100+Month(AddMonths(Today(),-3))))<$(=Num(Year(Today())*100+Month(Today())))\"}, Data=, AnoMes=>}",
+      "comment": "Janela dos últimos 3 meses fechados — base das médias históricas",
+      "tags": ["set-analysis", "comparativo"]
+    },
+
+    {
+      "name": "vCorMeta",
+      "definition": "RGB(27, 122, 62)",
+      "comment": "Verde Tirolez — meta atingida (>= 100%)",
+      "tags": ["ux", "cor"]
+    },
+    {
+      "name": "vCorPremiada",
+      "definition": "RGB(15, 111, 181)",
+      "comment": "Azul — faixa premiada intermediária (95% a 99,9%)",
+      "tags": ["ux", "cor"]
+    },
+    {
+      "name": "vCorRisco",
+      "definition": "RGB(232, 163, 23)",
+      "comment": "Amarelo — risco (90% a 94,9%)",
+      "tags": ["ux", "cor"]
+    },
+    {
+      "name": "vCorAbaixo",
+      "definition": "RGB(192, 57, 43)",
+      "comment": "Vermelho — abaixo da meta, sem premiação (< 90%)",
+      "tags": ["ux", "cor"]
+    },
+    {
+      "name": "vCorNeutra",
+      "definition": "RGB(148, 156, 164)",
+      "comment": "Cinza — sem dado / sem compra no período",
+      "tags": ["ux", "cor"]
+    },
+    {
+      "name": "vCorPorAtingimento",
+      "definition": "If($1 >= $(vDegrau3), $(vCorMeta), If($1 >= $(vDegrau2), $(vCorPremiada), If($1 >= $(vDegrau1), $(vCorRisco), $(vCorAbaixo))))",
+      "comment": "Função de cor. Uso na expressão de cor de um objeto: $(vCorPorAtingimento(Sum(RealVolumeTon)/Sum(MetaVolumeTon)))  — o argumento NÃO pode conter vírgulas.",
+      "tags": ["ux", "cor", "funcao"]
+    },
+
+    {
+      "name": "vTituloGapPositivacao",
+      "definition": "='Faltam ' & Num(Sum(GapPositivacaoUn), '#.##0') & ' PDVs para ' & Num($(vProxDegrauLabel), '0%') & ' da meta'",
+      "comment": "Microcopy acionável usada em título dinâmico de KPI",
+      "tags": ["ux", "insight"]
+    },
+    {
+      "name": "vProxDegrauLabel",
+      "definition": "Max(ProxDegrauPositivacao)",
+      "comment": "Percentual do próximo degrau perseguido no contexto atual",
+      "tags": ["ppt"]
+    },
+    {
+      "name": "vDiasUteisRestantes",
+      "definition": "Max(DiasUteisTotais) - Max(DiasUteisDecorridos)",
+      "comment": "Dias úteis que ainda restam no mês selecionado",
+      "tags": ["tempo", "projecao"]
+    }
+  ]
+}

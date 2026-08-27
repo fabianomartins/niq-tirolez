@@ -1,0 +1,46 @@
+{
+  "name": "ppt-tirolez-mashup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sales Execution Cockpit do Programa Por Performance Tirolez",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@emotion/cache": "^11.14.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^7.0.2",
+    "@mui/material": "^7.0.2",
+    "@mui/material-nextjs": "^7.0.2",
+    "@mui/x-data-grid": "^8.0.0",
+    "@nebula.js/sn-bar-chart": "^2.0.0",
+    "@nebula.js/sn-line-chart": "^2.0.0",
+    "@nebula.js/stardust": "^4.13.0",
+    "enigma.js": "^2.14.0",
+    "next": "^15.3.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "eslint": "^9.24.0",
+    "eslint-config-next": "^15.3.0",
+    "playwright": "^1.62.1",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=20.11"
+  }
+}
