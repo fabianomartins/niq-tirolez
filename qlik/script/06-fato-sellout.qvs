@@ -1,0 +1,115 @@
+///$tab 06 - Fato Sell Out
+/* =============================================================================
+   FACT_SELL_OUT
+   -----------------------------------------------------------------------------
+   Grao: Distribuidor x PDV x SKU x Dia.
+
+   Duas chaves compostas nascem aqui e sustentam todo o resto do modelo:
+     %ChaveDistMes     -> liga a FACT_PPT_MENSAL (metas e premiacao)
+     %ChaveDistPdvMes  -> liga a AGG_HERO_PDV_MES e as tabelas de oportunidade
+
+   FlagVenda separa linha real (1) de linha-esqueleto (0). TODA medida de
+   realizado usa {<FlagVenda={1}>}. Ver docs/02-modelo-dados.md §2.4.
+   ============================================================================= */
+
+FACT_SELL_OUT:
+LOAD
+    Num(Data)                                        AS %ChaveData,
+    AutoNumberHash128(CNPJ)                          AS %ChavePDV,
+    AutoNumberHash128(DistribuidorID)                AS %ChaveDistribuidor,
+    AutoNumberHash128(CodProduto)                    AS %ChaveProduto,
+    ChaveHero                                        AS %ChaveHero,
+    DistribuidorID & '|' & AnoMes                    AS %ChaveDistMes,
+    DistribuidorID & '|' & CNPJ & '|' & AnoMes       AS %ChaveDistPdvMes,
+    QtdCaixas,
+    Round(VolumeKg, 0.001)                           AS VolumeKg,
+    Round(VolumeKg / 1000, 0.000001)                 AS VolumeTon,
+    ValorSellOut,
+    1                                                AS FlagVenda,
+    NumeroDocumento,
+    Timestamp('$(vExecInicio)')                      AS DataIngestao
+;
+LOAD
+    *,
+    Date(MonthStart(Data), 'YYYY-MM')                AS AnoMes,
+    // Resolve a categoria Hero: composicao da regiao DO DISTRIBUIDOR
+    // cruzada com a subcategoria DO PRODUTO. Sem match -> 'NAOHERO'.
+    ApplyMap('MAP_HERO', RegiaoHeroDist & '|' & SubcategoriaProd, 'NAOHERO') AS ChaveHero,
+    QtdCaixas * PesoCaixa                            AS VolumeKg
+;
+LOAD
+    *,
+    ApplyMap('MAP_DIST_REGIAOHERO', DistribuidorID, 'DEMAIS') AS RegiaoHeroDist,
+    ApplyMap('MAP_PRODUTO_SUBCAT',  CodProduto, '')           AS SubcategoriaProd,
+    ApplyMap('MAP_PRODUTO_PESO',    CodProduto, 0)            AS PesoCaixa
+RESIDENT SRC_VENDA
+// Integridade referencial explicita: venda para PDV ou SKU inexistente nao
+// entra no fato - entraria como chave orfa e sumiria da tela sem aviso.
+WHERE Exists(CNPJ) AND Exists(CodProduto);
+
+// -----------------------------------------------------------------------------
+// Log de integridade referencial
+// -----------------------------------------------------------------------------
+CONCATENATE (QA_REJEITADOS)
+LOAD
+    'FACT_SELL_OUT'                                  AS QA_Tabela,
+    If(NOT Exists(CNPJ), 'Venda para CNPJ fora do cadastro de PDV',
+                         'Venda de SKU fora do cadastro de produto') AS QA_Motivo,
+    If(NOT Exists(CNPJ), CNPJ, CodProduto)           AS QA_Valor,
+    Count(CodProduto)                                AS QA_Ocorrencias
+RESIDENT SRC_VENDA
+WHERE NOT Exists(CNPJ) OR NOT Exists(CodProduto)
+GROUP BY
+    If(NOT Exists(CNPJ), 'Venda para CNPJ fora do cadastro de PDV',
+                         'Venda de SKU fora do cadastro de produto'),
+    If(NOT Exists(CNPJ), CNPJ, CodProduto);
+
+DROP TABLE SRC_VENDA;
+
+LET vLinhasFato = NoOfRows('FACT_SELL_OUT');
+TRACE >> FACT_SELL_OUT: $(vLinhasFato) linhas de venda;
+
+/* =============================================================================
+   LINHAS-ESQUELETO NIVEL DISTRIBUIDOR x MES
+   -----------------------------------------------------------------------------
+   Garante que TODO distribuidor elegivel tenha ancora em todos os meses da
+   janela, mesmo sem nenhuma venda. Sem isso, um distribuidor que zerou o mes
+   simplesmente desaparece da tela - exatamente o distribuidor que o executivo
+   mais precisa ver.
+   ============================================================================= */
+
+TMP_MESES:
+LOAD
+    Date(MonthStart(AddMonths($(vDataInicioNum), RecNo() - 1)), 'YYYY-MM') AS AnoMesEsq,
+    Num(MonthStart(AddMonths($(vDataInicioNum), RecNo() - 1)))             AS DataEsq
+AUTOGENERATE $(vMesesHistorico);
+
+TMP_ESQUELETO_DIST:
+LOAD
+    DistribuidorID,
+    %ChaveDistribuidor
+RESIDENT DIM_DISTRIBUIDOR
+WHERE FlagDistribuidorElegivel = 1;
+
+JOIN (TMP_ESQUELETO_DIST)
+LOAD AnoMesEsq, DataEsq RESIDENT TMP_MESES;
+
+CONCATENATE (FACT_SELL_OUT)
+LOAD
+    DataEsq                                          AS %ChaveData,
+    %ChaveDistribuidor,
+    DistribuidorID & '|' & AnoMesEsq                 AS %ChaveDistMes,
+    'NAOHERO'                                        AS %ChaveHero,
+    0                                                AS QtdCaixas,
+    0                                                AS VolumeKg,
+    0                                                AS VolumeTon,
+    0                                                AS ValorSellOut,
+    0                                                AS FlagVenda,
+    Timestamp('$(vExecInicio)')                      AS DataIngestao
+RESIDENT TMP_ESQUELETO_DIST;
+
+DROP TABLES TMP_ESQUELETO_DIST, TMP_MESES;
+
+LET vLinhasFatoTotal = NoOfRows('FACT_SELL_OUT');
+LET vLinhasEsqueleto = $(vLinhasFatoTotal) - $(vLinhasFato);
+TRACE >> Linhas-esqueleto distribuidor x mes: $(vLinhasEsqueleto);

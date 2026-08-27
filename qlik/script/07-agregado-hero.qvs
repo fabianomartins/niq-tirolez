@@ -1,0 +1,114 @@
+///$tab 07 - Agregado Hero
+/* =============================================================================
+   AGG_HERO_PDV_MES
+   -----------------------------------------------------------------------------
+   Grao: Distribuidor x PDV x Mes.
+
+   Materializa a regra: um PDV e HERO quando comprou >= 1 SKU de cada uma das 3
+   categorias Hero da regiao do seu distribuidor no mes.
+
+   Esta tabela e a espinha dorsal das Telas 3 (Navigator) e 4 (Oportunidades) e
+   da o RealMixHero da Tela 1. Calcular isso em Aggr() no cliente sobre 18M de
+   linhas seria inviavel - por isso vive aqui.
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 1. Flags de categoria por PDV x mes
+// -----------------------------------------------------------------------------
+TMP_HERO_FLAGS:
+LOAD
+    %ChaveDistPdvMes,
+    RangeMax(Max(Cat1), 0)             AS HeroCat1,
+    RangeMax(Max(Cat2), 0)             AS HeroCat2,
+    RangeMax(Max(Cat3), 0)             AS HeroCat3,
+    Sum(VolHeroTon)                    AS HeroVolumeTon,
+    Sum(VolTotalTon)                   AS HeroVolumeTotalTon,
+    Sum(VolTotalValor)                 AS HeroVolumeTotalValor,
+    Max(DataVenda)                     AS HeroUltimaCompraNum,
+    Count(DISTINCT CodProdutoHero)     AS HeroQtdSkusDistintos
+GROUP BY %ChaveDistPdvMes;
+LOAD
+    %ChaveDistPdvMes,
+    If(CatNum = 1, 1, 0)               AS Cat1,
+    If(CatNum = 2, 1, 0)               AS Cat2,
+    If(CatNum = 3, 1, 0)               AS Cat3,
+    If(CatNum > 0, VolumeTon, 0)       AS VolHeroTon,
+    VolumeTon                          AS VolTotalTon,
+    ValorSellOut                       AS VolTotalValor,
+    %ChaveData                         AS DataVenda,
+    If(CatNum > 0, %ChaveProduto, Null()) AS CodProdutoHero
+;
+LOAD
+    %ChaveDistPdvMes,
+    %ChaveProduto,
+    %ChaveData,
+    VolumeTon,
+    ValorSellOut,
+    Num(ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0)) AS CatNum
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1;
+
+// -----------------------------------------------------------------------------
+// 2. Status, cor e categorias faltantes
+// -----------------------------------------------------------------------------
+AGG_HERO_PDV_MES:
+LOAD
+    %ChaveDistPdvMes,
+    HeroDistribuidorID,
+    HeroCNPJ,
+    HeroAnoMes,
+    HeroRegiaoHero,
+    HeroCat1,
+    HeroCat2,
+    HeroCat3,
+    HeroQtdCategorias,
+    HeroQtdSkusDistintos,
+    Round(HeroVolumeTon, 0.000001)      AS HeroVolumeTon,
+    Round(HeroVolumeTotalTon, 0.000001) AS HeroVolumeTotalTon,
+    Round(HeroVolumeTotalValor, 0.01)   AS HeroVolumeTotalValor,
+    Date(HeroUltimaCompraNum)           AS HeroUltimaCompra,
+    HeroUltimaCompraNum,
+    If(HeroQtdCategorias = 3, 1, 0)     AS FlagPdvHero,
+    // Semantica visual da batalha naval (Tela 3)
+    Pick(HeroQtdCategorias + 1,
+         'Sem compra Hero', 'Falta 2+', 'Falta 1', 'Completo')      AS HeroStatus,
+    Pick(HeroQtdCategorias + 1,
+         'cinza', 'vermelho', 'amarelo', 'verde')                   AS HeroStatusCor,
+    // Quantas categorias faltam para virar Hero
+    3 - HeroQtdCategorias                                           AS HeroCategoriasFaltantesQtd,
+    // Quais faltam, em texto - alimenta a recomendacao da Tela 4
+    Trim(
+        If(HeroCat1 = 0, ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|1', 'Cat 1') & '; ', '') &
+        If(HeroCat2 = 0, ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|2', 'Cat 2') & '; ', '') &
+        If(HeroCat3 = 0, ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|3', 'Cat 3') & '; ', '')
+    )                                                               AS HeroCategoriasFaltantes,
+    // Quando falta exatamente 1, qual e o numero dela (drill direto ao SKU)
+    If(HeroQtdCategorias = 2,
+       If(HeroCat1 = 0, 1, If(HeroCat2 = 0, 2, 3)),
+       Null())                                                      AS HeroCategoriaFaltanteNum
+;
+LOAD
+    %ChaveDistPdvMes,
+    SubField(%ChaveDistPdvMes, '|', 1)                              AS HeroDistribuidorID,
+    SubField(%ChaveDistPdvMes, '|', 2)                              AS HeroCNPJ,
+    SubField(%ChaveDistPdvMes, '|', 3)                              AS HeroAnoMes,
+    ApplyMap('MAP_DIST_REGIAOHERO', SubField(%ChaveDistPdvMes, '|', 1), 'DEMAIS') AS HeroRegiaoHero,
+    HeroCat1, HeroCat2, HeroCat3,
+    HeroCat1 + HeroCat2 + HeroCat3                                  AS HeroQtdCategorias,
+    HeroQtdSkusDistintos,
+    HeroVolumeTon,
+    HeroVolumeTotalTon,
+    HeroVolumeTotalValor,
+    HeroUltimaCompraNum
+RESIDENT TMP_HERO_FLAGS;
+
+DROP TABLE TMP_HERO_FLAGS;
+
+// -----------------------------------------------------------------------------
+// 3. Mapas auxiliares para as oportunidades (aba 09)
+// -----------------------------------------------------------------------------
+MAP_AGG_HERO_FLAG:  MAPPING LOAD %ChaveDistPdvMes, FlagPdvHero      RESIDENT AGG_HERO_PDV_MES;
+MAP_AGG_HERO_VOL:   MAPPING LOAD %ChaveDistPdvMes, HeroVolumeTotalTon RESIDENT AGG_HERO_PDV_MES;
+
+LET vLinhasHero = NoOfRows('AGG_HERO_PDV_MES');
+TRACE >> AGG_HERO_PDV_MES: $(vLinhasHero) combinacoes PDV x mes avaliadas;

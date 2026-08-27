@@ -1,0 +1,477 @@
+///$tab 02 - Fontes
+/* =============================================================================
+   FONTES DE DADOS
+   -----------------------------------------------------------------------------
+   Produz as tabelas SRC_* consumidas pelas abas seguintes.
+
+   vUseMockData = 0  -> le das conexoes reais (bloco A)
+   vUseMockData = 1  -> gera base sintetica reproduzivel (bloco B)
+
+   A base mock e DETERMINISTICA: usa um hash senoidal sobre os indices, nao
+   Rand(). Duas cargas consecutivas produzem exatamente os mesmos numeros, o que
+   torna os testes de QA (docs/07-qa-checklist.md) reproduziveis.
+   ============================================================================= */
+
+// Hash pseudo-aleatorio deterministico em [0,1). Uso: $(vHash(iPdv, 12.9898))
+SET vHash = Frac(Fabs(Sin(($1) * ($2) + 78.233) * 43758.5453));
+
+
+/* =============================================================================
+   BLOCO A - FONTES REAIS
+   ============================================================================= */
+IF NOT $(vUseMockData) THEN
+
+    TRACE >> Modo PRODUCAO: lendo das conexoes corporativas;
+
+    // --- Hierarquia comercial (ERP Tirolez) -------------------------------
+    LIB CONNECT TO 'PPT_ERP_Tirolez';
+
+    SRC_REGIAO:
+    LOAD
+        Text(REGIAO_ID)                                    AS RegiaoID,
+        Text(REGIAO_NOME)                                  AS RegiaoNome,
+        Text(REGIAO_UF)                                    AS RegiaoUF,
+        // Regra de composicao Hero: SP tem composicao propria
+        If(Upper(Text(REGIAO_UF)) = 'SP', 'SP', 'DEMAIS')  AS RegiaoHero,
+        Lower(Text(COORDENADOR_EMAIL))                     AS RegiaoCoordenadorEmail
+    ;
+    SQL SELECT REGIAO_ID, REGIAO_NOME, REGIAO_UF, COORDENADOR_EMAIL FROM DW.DIM_REGIAO;
+
+    SRC_EXECUTIVO:
+    LOAD
+        Text(EXECUTIVO_ID)      AS ExecutivoID,
+        Text(EXECUTIVO_NOME)    AS ExecutivoNome,
+        Lower(Text(EMAIL))      AS ExecutivoEmail,
+        Text(CARGO)             AS ExecutivoCargo,
+        Text(REGIAO_ID)         AS RegiaoID
+    ;
+    SQL SELECT EXECUTIVO_ID, EXECUTIVO_NOME, EMAIL, CARGO, REGIAO_ID FROM DW.DIM_EXECUTIVO;
+
+    SRC_DISTRIBUIDOR:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        KeepChar(Text(CNPJ), '0123456789')                 AS DistribuidorCNPJ,
+        Text(RAZAO_SOCIAL)                                 AS DistribuidorNome,
+        Text(REGIAO_ID)                                    AS RegiaoID,
+        Text(EXECUTIVO_ID)                                 AS ExecutivoID,
+        Text(STATUS)                                       AS DistribuidorStatus,
+        Date(Floor(DT_INICIO_PPT))                         AS DistribuidorDataInicioPPT,
+        Lower(Text(EMAIL_PORTAL))                          AS DistribuidorEmailPortal
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, CNPJ, RAZAO_SOCIAL, REGIAO_ID, EXECUTIVO_ID,
+               STATUS, DT_INICIO_PPT, EMAIL_PORTAL
+        FROM DW.DIM_DISTRIBUIDOR;
+
+    SRC_PRODUTO:
+    LOAD
+        Text(COD_PRODUTO)                                  AS CodProduto,
+        Text(DESCRICAO)                                    AS ProdutoDescricao,
+        Text(CATEGORIA)                                    AS ProdutoCategoria,
+        // ATENCAO: a subcategoria e a chave da regra Hero. Qualquer divergencia
+        // de grafia quebra o Mix Hero silenciosamente. Ver 99 - Finalize.
+        Text(SUBCATEGORIA)                                 AS ProdutoSubcategoria,
+        Num(GRAMATURA)                                     AS ProdutoGramatura,
+        Num(PESO_LIQ_KG)                                   AS ProdutoPesoKg,
+        Num(UNID_POR_CAIXA)                                AS ProdutoUnidCaixa,
+        Num(PESO_LIQ_KG) * Num(UNID_POR_CAIXA)             AS ProdutoPesoCaixaKg,
+        Text(MARCA)                                        AS ProdutoMarca,
+        If(Text(STATUS) = 'A', 1, 0)                       AS FlagProdutoAtivo
+    ;
+    SQL SELECT COD_PRODUTO, DESCRICAO, CATEGORIA, SUBCATEGORIA, GRAMATURA,
+               PESO_LIQ_KG, UNID_POR_CAIXA, MARCA, STATUS
+        FROM DW.DIM_PRODUTO;
+
+    // --- Cadastro de PDV --------------------------------------------------
+    SRC_PDV:
+    LOAD
+        KeepChar(Text(CNPJ), '0123456789')                 AS CNPJ,
+        Text(RAZAO_SOCIAL)                                 AS PDVNome,
+        Text(NOME_FANTASIA)                                AS PDVFantasia,
+        Text(CANAL)                                        AS PDVCanal,
+        Text(CIDADE)                                       AS PDVCidade,
+        Text(UF)                                           AS PDVUF,
+        Num(LATITUDE)                                      AS PDVLatitude,
+        Num(LONGITUDE)                                     AS PDVLongitude,
+        Date(Floor(DT_CADASTRO))                           AS PDVDataCadastro
+    ;
+    SQL SELECT CNPJ, RAZAO_SOCIAL, NOME_FANTASIA, CANAL, CIDADE, UF,
+               LATITUDE, LONGITUDE, DT_CADASTRO
+        FROM DW.DIM_PDV;
+
+    // --- Sell Out (Mtrix / coleta NIQ) ------------------------------------
+    // Carga incremental: recarrega sempre os ultimos 3 meses (reprocessamento
+    // retroativo de distribuidor e regra, nao excecao - ver docs/01 §1.3).
+    LET vDataIncremental = Date(MonthStart(AddMonths(Today(), -3)), 'YYYY-MM-DD');
+
+    LIB CONNECT TO 'PPT_SellOut_Mtrix';
+
+    SRC_VENDA:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        KeepChar(Text(CNPJ_PDV), '0123456789')             AS CNPJ,
+        Text(COD_PRODUTO)                                  AS CodProduto,
+        Date(Floor(DT_EMISSAO))                            AS Data,
+        Num(QTD_CAIXAS)                                    AS QtdCaixas,
+        Num(VALOR_LIQUIDO)                                 AS ValorSellOut,
+        Text(NUM_DOCUMENTO)                                AS NumeroDocumento
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, CNPJ_PDV, COD_PRODUTO, DT_EMISSAO,
+               QTD_CAIXAS, VALOR_LIQUIDO, NUM_DOCUMENTO
+        FROM STG.FATO_SELL_OUT
+       WHERE DT_EMISSAO >= '$(vDataIncremental)';
+
+    // Historico consolidado dos meses ja fechados
+    CONCATENATE (SRC_VENDA)
+    LOAD
+        DistribuidorID, CNPJ, CodProduto, Data,
+        QtdCaixas, ValorSellOut, NumeroDocumento
+    FROM [$(vPastaQVD)SRC_VENDA_HIST.qvd] (qvd)
+    WHERE Data < '$(vDataIncremental)';
+
+    // --- Metas PPT e Sell-In ----------------------------------------------
+    SRC_META:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        Date(MonthStart(Floor(DT_COMPETENCIA)), 'YYYY-MM') AS AnoMes,
+        Num(META_POSITIVACAO)                              AS MetaPositivacao,
+        Num(META_VOLUME_TON)                               AS MetaVolumeTon,
+        Num(META_MIX_HERO)                                 AS MetaMixHero
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, DT_COMPETENCIA, META_POSITIVACAO,
+               META_VOLUME_TON, META_MIX_HERO
+        FROM DW.FATO_META_PPT;
+
+    SRC_SELLIN:
+    LOAD
+        Text(DISTRIBUIDOR_ID)                              AS DistribuidorID,
+        Date(MonthStart(Floor(DT_COMPETENCIA)), 'YYYY-MM') AS AnoMes,
+        Num(VALOR_SELL_IN)                                 AS SellInValor,
+        If(Num(FLAG_FECHADO) = 1, 1, 0)                    AS FlagMesFechado
+    ;
+    SQL SELECT DISTRIBUIDOR_ID, DT_COMPETENCIA, VALOR_SELL_IN, FLAG_FECHADO
+        FROM DW.FATO_SELL_IN;
+
+END IF;
+
+
+/* =============================================================================
+   BLOCO B - BASE MOCK DETERMINISTICA
+   ============================================================================= */
+IF $(vUseMockData) THEN
+
+    TRACE >> Modo MOCK: gerando base sintetica deterministica;
+
+    // -------------------------------------------------------------------------
+    // B1. Regioes
+    // -------------------------------------------------------------------------
+    SRC_REGIAO:
+    LOAD * INLINE [
+RegiaoID, RegiaoNome, RegiaoUF, RegiaoHero, RegiaoCoordenadorEmail
+1, Sao Paulo, SP, SP, coord.sp@tirolez.com.br
+2, Sul, PR, DEMAIS, coord.sul@tirolez.com.br
+3, Sudeste, MG, DEMAIS, coord.sudeste@tirolez.com.br
+4, Centro-Oeste, GO, DEMAIS, coord.co@tirolez.com.br
+5, Nordeste, PE, DEMAIS, coord.ne@tirolez.com.br
+6, Norte, PA, DEMAIS, coord.norte@tirolez.com.br
+];
+
+    // -------------------------------------------------------------------------
+    // B2. Cidades (5 por regiao) - usadas no mapa da Tela 6
+    // -------------------------------------------------------------------------
+    MOCK_CIDADE:
+    LOAD
+        Text(RegiaoID) & '|' & Text(CidadeSeq) AS %MockCidadeKey,
+        Cidade, UF, Lat, Lon
+    INLINE [
+RegiaoID, CidadeSeq, Cidade, UF, Lat, Lon
+1, 1, Sao Paulo, SP, -23.5505, -46.6333
+1, 2, Campinas, SP, -22.9056, -47.0608
+1, 3, Ribeirao Preto, SP, -21.1775, -47.8103
+1, 4, Santos, SP, -23.9608, -46.3336
+1, 5, Sorocaba, SP, -23.5015, -47.4526
+2, 1, Curitiba, PR, -25.4284, -49.2733
+2, 2, Porto Alegre, RS, -30.0346, -51.2177
+2, 3, Florianopolis, SC, -27.5954, -48.5480
+2, 4, Londrina, PR, -23.3103, -51.1628
+2, 5, Caxias do Sul, RS, -29.1678, -51.1794
+3, 1, Belo Horizonte, MG, -19.9167, -43.9345
+3, 2, Rio de Janeiro, RJ, -22.9068, -43.1729
+3, 3, Vitoria, ES, -20.3155, -40.3128
+3, 4, Uberlandia, MG, -18.9186, -48.2772
+3, 5, Juiz de Fora, MG, -21.7642, -43.3496
+4, 1, Goiania, GO, -16.6869, -49.2648
+4, 2, Brasilia, DF, -15.7939, -47.8828
+4, 3, Campo Grande, MS, -20.4697, -54.6201
+4, 4, Cuiaba, MT, -15.6014, -56.0979
+4, 5, Anapolis, GO, -16.3267, -48.9528
+5, 1, Recife, PE, -8.0476, -34.8770
+5, 2, Salvador, BA, -12.9777, -38.5016
+5, 3, Fortaleza, CE, -3.7319, -38.5267
+5, 4, Natal, RN, -5.7945, -35.2110
+5, 5, Sao Luis, MA, -2.5307, -44.3068
+6, 1, Belem, PA, -1.4558, -48.5044
+6, 2, Manaus, AM, -3.1190, -60.0217
+6, 3, Porto Velho, RO, -8.7619, -63.9039
+6, 4, Palmas, TO, -10.1849, -48.3336
+6, 5, Rio Branco, AC, -9.9754, -67.8249
+];
+
+    MAP_CIDADE_NOME: MAPPING LOAD %MockCidadeKey, Cidade RESIDENT MOCK_CIDADE;
+    MAP_CIDADE_UF:   MAPPING LOAD %MockCidadeKey, UF     RESIDENT MOCK_CIDADE;
+    MAP_CIDADE_LAT:  MAPPING LOAD %MockCidadeKey, Lat    RESIDENT MOCK_CIDADE;
+    MAP_CIDADE_LON:  MAPPING LOAD %MockCidadeKey, Lon    RESIDENT MOCK_CIDADE;
+
+    // -------------------------------------------------------------------------
+    // B3. Produtos - o catalogo real que sustenta a regra Hero
+    //     PoolHero: C1 / C2 / C3SP / C3DEM / OUTROS (usado apenas pelo gerador)
+    // -------------------------------------------------------------------------
+    SRC_PRODUTO_TMP:
+    LOAD * INLINE [
+CodProduto, ProdutoDescricao, ProdutoCategoria, ProdutoSubcategoria, ProdutoGramatura, ProdutoUnidCaixa, PrecoKg, PoolHero, PoolSeq
+TZ-CR-200,  Creme de Ricota Tradicional 200g, Ricota,    Creme Ricota,        200,  24, 34.90, C1, 1
+TZ-CR-400,  Creme de Ricota Tradicional 400g, Ricota,    Creme Ricota,        400,  12, 32.50, C1, 2
+TZ-CRL-200, Creme de Ricota Light 200g,       Ricota,    Creme Ricota Light,  200,  24, 37.90, C1, 3
+TZ-CRL-400, Creme de Ricota Light 400g,       Ricota,    Creme Ricota Light,  400,  12, 35.40, C1, 4
+TZ-RQ-200,  Requeijao Cremoso 200g,           Requeijao, Requeijao,           200,  24, 39.90, C2, 1
+TZ-RQ-400,  Requeijao Cremoso 400g,           Requeijao, Requeijao,           400,  12, 36.80, C2, 2
+TZ-RQ-1800, Requeijao Cremoso Balde 1.8kg,    Requeijao, Requeijao,           1800,  4, 29.90, C2, 3
+TZ-RQL-200, Requeijao Light 200g,             Requeijao, Requeijao Light,     200,  24, 42.50, C2, 4
+TZ-RQL-400, Requeijao Light 400g,             Requeijao, Requeijao Light,     400,  12, 39.20, C2, 5
+TZ-MUF-150, Mussarela Fatiada 150g,           Fatiados,  Mussarela Fatiada,   150,  20, 48.90, C3SP, 1
+TZ-MUF-300, Mussarela Fatiada 300g,           Fatiados,  Mussarela Fatiada,   300,  12, 46.20, C3SP, 2
+TZ-MUL-150, Mussarela Light Fatiada 150g,     Fatiados,  Mussarela Light,     150,  20, 52.40, C3SP, 3
+TZ-PRF-150, Prato Fatiado 150g,               Fatiados,  Prato Fatiado,       150,  20, 47.60, C3SP, 4
+TZ-PRF-300, Prato Fatiado 300g,               Fatiados,  Prato Fatiado,       300,  12, 45.10, C3SP, 5
+TZ-PRL-150, Prato Light Fatiado 150g,         Fatiados,  Prato Light,         150,  20, 51.80, C3SP, 6
+TZ-MTC-200, Manteiga Com Sal 200g,            Manteiga,  Manteiga Com Sal,    200,  24, 62.90, C3DEM, 1
+TZ-MTC-500, Manteiga Com Sal 500g,            Manteiga,  Manteiga Com Sal,    500,  12, 58.40, C3DEM, 2
+TZ-MTS-200, Manteiga Sem Sal 200g,            Manteiga,  Manteiga Sem Sal,    200,  24, 64.20, C3DEM, 3
+TZ-MTS-500, Manteiga Sem Sal 500g,            Manteiga,  Manteiga Sem Sal,    500,  12, 59.80, C3DEM, 4
+TZ-MUP-3000,Mussarela Peca 3kg,               Queijos,   Mussarela Peca,      3000,  4, 41.50, OUTROS, 1
+TZ-PRP-3000,Prato Peca 3kg,                   Queijos,   Prato Peca,          3000,  4, 40.20, OUTROS, 2
+TZ-QCO-500, Queijo Coalho 500g,               Queijos,   Queijo Coalho,       500,  12, 44.70, OUTROS, 3
+TZ-PRV-500, Provolone 500g,                   Queijos,   Provolone,           500,  12, 55.30, OUTROS, 4
+TZ-PAR-100, Parmesao Ralado 100g,             Queijos,   Parmesao Ralado,     100,  36, 72.90, OUTROS, 5
+TZ-MIN-500, Minas Frescal 500g,               Queijos,   Minas Frescal,       500,  12, 38.60, OUTROS, 6
+TZ-COT-200, Cottage 200g,                     Queijos,   Cottage,             200,  24, 43.80, OUTROS, 7
+TZ-CHE-150, Cheddar Fatiado 150g,             Fatiados,  Cheddar Fatiado,     150,  20, 49.90, OUTROS, 8
+];
+
+    SRC_PRODUTO:
+    LOAD
+        CodProduto,
+        ProdutoDescricao,
+        ProdutoCategoria,
+        ProdutoSubcategoria,
+        ProdutoGramatura,
+        ProdutoUnidCaixa,
+        ProdutoGramatura / 1000                            AS ProdutoPesoKg,
+        ProdutoGramatura * ProdutoUnidCaixa / 1000         AS ProdutoPesoCaixaKg,
+        PrecoKg,
+        'Tirolez'                                          AS ProdutoMarca,
+        1                                                  AS FlagProdutoAtivo
+    RESIDENT SRC_PRODUTO_TMP;
+
+    MAP_POOL_PRODUTO:
+    MAPPING LOAD PoolHero & '|' & PoolSeq, CodProduto RESIDENT SRC_PRODUTO_TMP;
+
+    MAP_PRODUTO_PESOCX:
+    MAPPING LOAD CodProduto, ProdutoGramatura * ProdutoUnidCaixa / 1000 RESIDENT SRC_PRODUTO_TMP;
+
+    MAP_PRODUTO_PRECO:
+    MAPPING LOAD CodProduto, PrecoKg RESIDENT SRC_PRODUTO_TMP;
+
+    DROP TABLE SRC_PRODUTO_TMP;
+
+    // Tamanho de cada pool - usado para sortear SKU dentro do pool
+    SET vPoolC1    = 4;
+    SET vPoolC2    = 5;
+    SET vPoolC3SP  = 6;
+    SET vPoolC3DEM = 4;
+    SET vPoolOUT   = 8;
+
+    // -------------------------------------------------------------------------
+    // B4. Executivos e Distribuidores
+    // -------------------------------------------------------------------------
+    SRC_EXECUTIVO:
+    LOAD
+        Text('EXE' & Num(RecNo(), '000'))                       AS ExecutivoID,
+        'Executivo ' & Num(RecNo(), '00')                       AS ExecutivoNome,
+        'executivo' & Num(RecNo(), '00') & '@tirolez.com.br'    AS ExecutivoEmail,
+        'Executivo de Contas'                                   AS ExecutivoCargo,
+        Text(Mod(RecNo() - 1, $(vMockRegioes)) + 1)             AS RegiaoID
+    AUTOGENERATE $(vMockExecutivos);
+
+    SRC_DISTRIBUIDOR:
+    LOAD
+        DistribuidorID,
+        DistribuidorCNPJ,
+        DistribuidorNome,
+        RegiaoID,
+        ExecutivoID,
+        DistribuidorStatus,
+        DistribuidorDataInicioPPT,
+        Lower(Replace(DistribuidorNome, ' ', '.')) & '@distribuidor.com.br' AS DistribuidorEmailPortal
+    ;
+    LOAD
+        Text('D' & Num(RecNo(), '000'))                                   AS DistribuidorID,
+        Text(Num(30000000 + RecNo() * 13, '00000000')) & '0001'
+            & Text(Num(Mod(RecNo() * 17, 90) + 10, '00'))                 AS DistribuidorCNPJ,
+        'Distribuidora ' & Num(RecNo(), '00')                             AS DistribuidorNome,
+        Text(Mod(RecNo() - 1, $(vMockRegioes)) + 1)                       AS RegiaoID,
+        Text('EXE' & Num(Mod(RecNo() - 1, $(vMockExecutivos)) + 1, '000')) AS ExecutivoID,
+        If($(vHash(RecNo(), 5.11)) < 0.93, 'Ativo', 'Suspenso')           AS DistribuidorStatus,
+        Date(AddMonths($(vDataInicioNum), -Floor($(vHash(RecNo(), 9.71)) * 24))) AS DistribuidorDataInicioPPT
+    AUTOGENERATE $(vMockDistribuidores);
+
+    MAP_DIST_REGIAO:  MAPPING LOAD DistribuidorID, RegiaoID RESIDENT SRC_DISTRIBUIDOR;
+
+    MAP_REGIAO_HERO:  MAPPING LOAD RegiaoID, RegiaoHero RESIDENT SRC_REGIAO;
+
+    // -------------------------------------------------------------------------
+    // B5. PDVs
+    //     Cada PDV pertence a um distribuidor (carteira) e a uma cidade da
+    //     regiao desse distribuidor. "qPdv" e o indice de qualidade do PDV
+    //     (0..1): controla frequencia de compra, porte e propensao Hero.
+    // -------------------------------------------------------------------------
+    SRC_PDV_TMP:
+    LOAD
+        iPdv,
+        qPdv,
+        DistribuidorID,
+        RegiaoID,
+        ApplyMap('MAP_REGIAO_HERO', RegiaoID, 'DEMAIS')                    AS RegiaoHero,
+        Text(Num(20000000 + iPdv * 7, '00000000')) & '0001'
+            & Text(Num(Mod(iPdv * 31, 90) + 10, '00'))                     AS CNPJ,
+        RegiaoID & '|' & (Floor($(vHash(iPdv, 3.31)) * 5) + 1)             AS %MockCidadeKey,
+        Pick(Floor($(vHash(iPdv, 6.13)) * 4) + 1,
+             'Varejo Tradicional', 'Varejo Tradicional',
+             'Padaria e Conveniencia', 'Atacado e Food Service')           AS PDVCanal
+    ;
+    LOAD
+        RecNo()                                                            AS iPdv,
+        $(vHash(RecNo(), 1.17))                                            AS qPdv,
+        Text('D' & Num(Floor($(vHash(RecNo(), 2.71)) * $(vMockDistribuidores)) + 1, '000')) AS DistribuidorID,
+        ApplyMap('MAP_DIST_REGIAO',
+                 Text('D' & Num(Floor($(vHash(RecNo(), 2.71)) * $(vMockDistribuidores)) + 1, '000')), '1') AS RegiaoID
+    AUTOGENERATE $(vMockPDVs);
+
+    SRC_PDV:
+    LOAD
+        CNPJ,
+        'Comercio de Alimentos ' & Num(iPdv, '0000') & ' Ltda'             AS PDVNome,
+        Pick(Mod(iPdv, 8) + 1,
+             'Mercado', 'Supermercado', 'Emporio', 'Mercearia',
+             'Padaria', 'Minimercado', 'Adega', 'Casa de Frios')
+            & ' ' & Pick(Mod(Floor(iPdv / 8), 10) + 1,
+             'Sao Jorge', 'Boa Vista', 'Central', 'do Bairro', 'Progresso',
+             'Estrela', 'Uniao', 'Popular', 'Familia', 'Bom Preco')        AS PDVFantasia,
+        PDVCanal,
+        ApplyMap('MAP_CIDADE_NOME', %MockCidadeKey, 'Nao informado')       AS PDVCidade,
+        ApplyMap('MAP_CIDADE_UF',   %MockCidadeKey, 'ND')                  AS PDVUF,
+        // dispersao de ate ~0.15 grau para o mapa nao virar um unico ponto
+        Num(ApplyMap('MAP_CIDADE_LAT', %MockCidadeKey, 0)) + ($(vHash(iPdv, 7.77)) - 0.5) * 0.3 AS PDVLatitude,
+        Num(ApplyMap('MAP_CIDADE_LON', %MockCidadeKey, 0)) + ($(vHash(iPdv, 8.88)) - 0.5) * 0.3 AS PDVLongitude,
+        Date(AddMonths($(vDataInicioNum), -Floor($(vHash(iPdv, 4.44)) * 36))) AS PDVDataCadastro
+    RESIDENT SRC_PDV_TMP;
+
+    // Mapas usados pelo gerador de vendas
+    MAP_PDV_DIST:    MAPPING LOAD iPdv, DistribuidorID RESIDENT SRC_PDV_TMP;
+    MAP_PDV_CNPJ:    MAPPING LOAD iPdv, CNPJ           RESIDENT SRC_PDV_TMP;
+    MAP_PDV_HERO:    MAPPING LOAD iPdv, RegiaoHero     RESIDENT SRC_PDV_TMP;
+    MAP_PDV_Q:       MAPPING LOAD iPdv, qPdv           RESIDENT SRC_PDV_TMP;
+
+    DROP TABLE SRC_PDV_TMP;
+
+    // -------------------------------------------------------------------------
+    // B6. Sell Out
+    //     Grade completa PDV x Mes x Slot; cada linha sobrevive conforme a
+    //     probabilidade do slot. Slots 1..3 sao os slots Hero (C1, C2, C3 da
+    //     regiao); slot 6 e a categoria C3 da OUTRA regiao - compra real que
+    //     NAO conta para o Hero local (caso de teste proposital).
+    // -------------------------------------------------------------------------
+    LET vMockLinhas = $(vMockPDVs) * $(vMesesHistorico) * $(vMockSlots);
+    LET vDiaHoje    = Day('$(vDataHoje)');
+
+    TRACE >> Gerando ate $(vMockLinhas) linhas candidatas de sell out;
+
+    SRC_VENDA:
+    LOAD
+        DistribuidorID,
+        CNPJ,
+        CodProduto,
+        Data,
+        QtdCaixas,
+        Round(QtdCaixas * ApplyMap('MAP_PRODUTO_PESOCX', CodProduto, 1)
+              * ApplyMap('MAP_PRODUTO_PRECO', CodProduto, 40), 0.01)       AS ValorSellOut,
+        'NF' & Num(iPdv, '00000') & Num(iMes, '00') & Num(iSlot, '0')      AS NumeroDocumento
+    WHERE QtdCaixas > 0 AND Len(CodProduto) > 0;
+    LOAD
+        iPdv, iMes, iSlot, Data,
+        ApplyMap('MAP_PDV_DIST', iPdv, 'D001')                             AS DistribuidorID,
+        ApplyMap('MAP_PDV_CNPJ', iPdv, '')                                 AS CNPJ,
+        CodProduto,
+        // Porte: PDVs melhores compram mais caixas
+        Ceil((1 + $(vHash(iPdv * 1000 + iMes * 13 + iSlot, 11.31)) * 6) * (0.5 + qPdv * 2.5)) AS QtdCaixas
+    ;
+    LOAD
+        *,
+        // Sorteio do SKU dentro do pool do slot
+        ApplyMap('MAP_POOL_PRODUTO',
+            Pool & '|' & (Floor($(vHash(iPdv * 977 + iMes * 41 + iSlot, 13.77))
+                                * Pick(Match(Pool, 'C1', 'C2', 'C3SP', 'C3DEM', 'OUTROS'),
+                                       $(vPoolC1), $(vPoolC2), $(vPoolC3SP), $(vPoolC3DEM), $(vPoolOUT)))
+                          + 1),
+            '')                                                            AS CodProduto
+    ;
+    LOAD
+        *,
+        // Pool de produtos de cada slot
+        If(iSlot = 1, 'C1',
+        If(iSlot = 2, 'C2',
+        If(iSlot = 3, If(RegiaoHero = 'SP', 'C3SP', 'C3DEM'),
+        If(iSlot = 6, If(RegiaoHero = 'SP', 'C3DEM', 'C3SP'),
+           'OUTROS'))))                                                    AS Pool
+    WHERE Sobrevive = 1;
+    LOAD
+        *,
+        If(Ativo = 0, 0,
+        If(iSlot = 1, If($(vHash(iPdv * 31 + iMes * 7 + 101, 17.19)) < (0.35 + qPdv * 0.45), 1, 0),
+        If(iSlot = 2, If($(vHash(iPdv * 31 + iMes * 7 + 202, 19.23)) < (0.45 + qPdv * 0.45), 1, 0),
+        If(iSlot = 3, If($(vHash(iPdv * 31 + iMes * 7 + 303, 23.29)) < (0.30 + qPdv * 0.50), 1, 0),
+           If($(vHash(iPdv * 31 + iMes * 7 + iSlot * 97, 29.31)) < (0.55 - (iSlot - 4) * 0.09), 1, 0)
+        ))))                                                               AS Sobrevive
+    ;
+    LOAD
+        *,
+        // O PDV comprou algo neste mes?
+        If($(vHash(iPdv * 137 + iMes * 61, 31.41)) < (0.55 + qPdv * 0.40), 1, 0) AS Ativo,
+        Date(MonthStart(AddMonths($(vDataInicioNum), iMes - 1))
+             + Floor($(vHash(iPdv * 53 + iMes * 29 + iSlot, 37.51)) * 27))      AS Data
+    ;
+    LOAD
+        Floor((RecNo() - 1) / ($(vMesesHistorico) * $(vMockSlots))) + 1     AS iPdv,
+        Floor(Mod(RecNo() - 1, $(vMesesHistorico) * $(vMockSlots)) / $(vMockSlots)) + 1 AS iMes,
+        Mod(RecNo() - 1, $(vMockSlots)) + 1                                 AS iSlot,
+        ApplyMap('MAP_PDV_Q',    Floor((RecNo() - 1) / ($(vMesesHistorico) * $(vMockSlots))) + 1, 0.5) AS qPdv,
+        ApplyMap('MAP_PDV_HERO', Floor((RecNo() - 1) / ($(vMesesHistorico) * $(vMockSlots))) + 1, 'DEMAIS') AS RegiaoHero
+    AUTOGENERATE $(vMockLinhas);
+
+    // O mes corrente e parcial: descarta o que "aconteceria" depois de hoje.
+    // E isso que da sentido a projecao de fechamento e ao gap acionavel.
+    SRC_VENDA_FINAL:
+    NOCONCATENATE
+    LOAD *
+    RESIDENT SRC_VENDA
+    WHERE Num(Data) <= $(vDataFimNum)
+      AND (Num(Year(Data) * 100 + Month(Data)) < $(vAnoMesAtual) OR Day(Data) <= $(vDiaHoje));
+
+    DROP TABLE SRC_VENDA;
+    RENAME TABLE SRC_VENDA_FINAL TO SRC_VENDA;
+
+    LET vQtdLinhasVenda = NoOfRows('SRC_VENDA');
+    TRACE >> SRC_VENDA gerada com $(vQtdLinhasVenda) linhas;
+
+    DROP TABLE MOCK_CIDADE;
+
+END IF;

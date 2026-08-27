@@ -1,0 +1,149 @@
+///$tab 04 - Dimensoes
+/* =============================================================================
+   DIMENSOES DO MODELO ESTRELA
+   DIM_REGIAO | DIM_EXECUTIVO | DIM_DISTRIBUIDOR | DIM_PDV | DIM_PRODUTO
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// DIM_REGIAO
+// -----------------------------------------------------------------------------
+DIM_REGIAO:
+LOAD
+    AutoNumberHash128(RegiaoID)  AS %ChaveRegiao,
+    RegiaoID,
+    RegiaoNome,
+    RegiaoUF,
+    // 'SP' ou 'DEMAIS' - define qual composicao Hero se aplica
+    RegiaoHero,
+    If(RegiaoHero = 'SP', 'Cat 3 = Fatiados', 'Cat 3 = Manteiga') AS RegiaoHeroDescricao,
+    Lower(RegiaoCoordenadorEmail) AS RegiaoCoordenadorEmail
+RESIDENT SRC_REGIAO;
+
+MAP_REGIAO_HERO_FINAL: MAPPING LOAD RegiaoID, RegiaoHero RESIDENT DIM_REGIAO;
+MAP_REGIAO_NOME:       MAPPING LOAD RegiaoID, RegiaoNome RESIDENT DIM_REGIAO;
+
+DROP TABLE SRC_REGIAO;
+
+// -----------------------------------------------------------------------------
+// DIM_EXECUTIVO
+// -----------------------------------------------------------------------------
+DIM_EXECUTIVO:
+LOAD
+    AutoNumberHash128(ExecutivoID) AS %ChaveExecutivo,
+    ExecutivoID,
+    ExecutivoNome,
+    Lower(ExecutivoEmail)          AS ExecutivoEmail,
+    ExecutivoCargo,
+    ApplyMap('MAP_REGIAO_NOME', RegiaoID, 'Nao informada') AS ExecutivoRegiaoNome
+RESIDENT SRC_EXECUTIVO;
+
+DROP TABLE SRC_EXECUTIVO;
+
+// -----------------------------------------------------------------------------
+// DIM_DISTRIBUIDOR
+// -----------------------------------------------------------------------------
+DIM_DISTRIBUIDOR:
+LOAD
+    AutoNumberHash128(DistribuidorID)                    AS %ChaveDistribuidor,
+    DistribuidorID,
+    DistribuidorCNPJ,
+    Left(DistribuidorCNPJ, 2) & '.' & Mid(DistribuidorCNPJ, 3, 3) & '.'
+        & Mid(DistribuidorCNPJ, 6, 3) & '/' & Mid(DistribuidorCNPJ, 9, 4)
+        & '-' & Right(DistribuidorCNPJ, 2)               AS DistribuidorCNPJFormatado,
+    DistribuidorNome,
+    AutoNumberHash128(RegiaoID)                          AS %ChaveRegiao,
+    AutoNumberHash128(ExecutivoID)                       AS %ChaveExecutivo,
+    DistribuidorStatus,
+    DistribuidorDataInicioPPT,
+    Lower(DistribuidorEmailPortal)                       AS DistribuidorEmailPortal,
+    // Elegibilidade ao PPT: precisa estar ativo e ter iniciado o programa
+    If(DistribuidorStatus = 'Ativo', 1, 0)               AS FlagDistribuidorElegivel,
+    // Composicao Hero herdada da regiao - fica no distribuidor porque e ele
+    // quem determina qual regra vale para as vendas dele
+    ApplyMap('MAP_REGIAO_HERO_FINAL', RegiaoID, 'DEMAIS') AS DistribuidorRegiaoHero
+RESIDENT SRC_DISTRIBUIDOR;
+
+// Mapas para derivar a chave Hero na tabela fato
+MAP_DIST_REGIAOHERO: MAPPING LOAD DistribuidorID, DistribuidorRegiaoHero RESIDENT DIM_DISTRIBUIDOR;
+MAP_DIST_NOME:       MAPPING LOAD DistribuidorID, DistribuidorNome       RESIDENT DIM_DISTRIBUIDOR;
+
+DROP TABLE SRC_DISTRIBUIDOR;
+
+// -----------------------------------------------------------------------------
+// DIM_PDV
+// A chave de negocio da positivacao e o CNPJ - 14 digitos, sem mascara.
+// Qualquer sujeira aqui infla ou desinfla o KPI que paga o distribuidor.
+// -----------------------------------------------------------------------------
+DIM_PDV:
+LOAD
+    AutoNumberHash128(CNPJ)                              AS %ChavePDV,
+    CNPJ,
+    Left(CNPJ, 2) & '.' & Mid(CNPJ, 3, 3) & '.' & Mid(CNPJ, 6, 3)
+        & '/' & Mid(CNPJ, 9, 4) & '-' & Right(CNPJ, 2)   AS CNPJFormatado,
+    PDVNome,
+    PDVFantasia,
+    PDVCanal,
+    PDVCidade,
+    PDVUF,
+    PDVLatitude,
+    PDVLongitude,
+    PDVDataCadastro
+RESIDENT SRC_PDV
+// Len = 14 descarta CNPJ sujo; NOT Exists(CNPJ) garante 1 linha por CNPJ.
+// Sem a deduplicacao, um PDV cadastrado duas vezes conta duas positivacoes.
+WHERE Len(Trim(CNPJ)) = 14 AND NOT Exists(CNPJ);
+
+// Log de qualidade - ilha proposital, consumida no painel de auditoria.
+// Criada sempre com uma linha semente para que os CONCATENATE das abas
+// seguintes nunca falhem quando nao houver rejeicao.
+QA_REJEITADOS:
+LOAD * INLINE [
+QA_Tabela, QA_Motivo, QA_Valor, QA_Ocorrencias
+CARGA, Execucao iniciada sem rejeicoes, -, 0
+];
+
+CONCATENATE (QA_REJEITADOS)
+LOAD
+    'DIM_PDV'                                            AS QA_Tabela,
+    'CNPJ invalido (tamanho diferente de 14)'            AS QA_Motivo,
+    CNPJ                                                 AS QA_Valor,
+    Count(CNPJ)                                          AS QA_Ocorrencias
+RESIDENT SRC_PDV
+WHERE Len(Trim(CNPJ)) <> 14
+GROUP BY CNPJ;
+
+DROP TABLE SRC_PDV;
+
+MAP_PDV_FANTASIA:    MAPPING LOAD CNPJ, PDVFantasia   RESIDENT DIM_PDV;
+MAP_PDV_CANAL:       MAPPING LOAD CNPJ, PDVCanal      RESIDENT DIM_PDV;
+MAP_PDV_CIDADE:      MAPPING LOAD CNPJ, PDVCidade     RESIDENT DIM_PDV;
+MAP_PDVKEY_CANAL:    MAPPING LOAD %ChavePDV, PDVCanal RESIDENT DIM_PDV;
+
+// -----------------------------------------------------------------------------
+// DIM_PRODUTO
+// -----------------------------------------------------------------------------
+DIM_PRODUTO:
+LOAD
+    AutoNumberHash128(CodProduto)                        AS %ChaveProduto,
+    CodProduto,
+    ProdutoDescricao,
+    ProdutoCategoria,
+    // Normalizada: e a chave que casa com a composicao Hero
+    Capitalize(Trim(ProdutoSubcategoria))                AS ProdutoSubcategoria,
+    ProdutoGramatura,
+    ProdutoGramatura & 'g'                               AS ProdutoGramaturaLabel,
+    ProdutoUnidCaixa,
+    ProdutoPesoKg,
+    ProdutoPesoCaixaKg,
+    ProdutoMarca,
+    FlagProdutoAtivo
+RESIDENT SRC_PRODUTO;
+
+MAP_PRODUTO_SUBCAT: MAPPING LOAD CodProduto, Capitalize(Trim(ProdutoSubcategoria)) RESIDENT SRC_PRODUTO;
+MAP_PRODUTO_PESO:   MAPPING LOAD CodProduto, ProdutoPesoCaixaKg                    RESIDENT SRC_PRODUTO;
+MAP_PRODUTO_DESC:   MAPPING LOAD CodProduto, ProdutoDescricao                      RESIDENT SRC_PRODUTO;
+MAP_PRODKEY_COD:    MAPPING LOAD AutoNumberHash128(CodProduto), CodProduto          RESIDENT SRC_PRODUTO;
+
+DROP TABLE SRC_PRODUTO;
+
+TRACE >> Dimensoes carregadas;

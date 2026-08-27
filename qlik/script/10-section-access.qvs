@@ -1,0 +1,121 @@
+///$tab 10 - Section Access
+/* =============================================================================
+   SECTION ACCESS - SEGURANCA DE LINHA POR PERSONA
+   -----------------------------------------------------------------------------
+   Regra: o escopo de dados e resolvido pelo MOTOR QLIK, nunca pelo front-end.
+   Um distribuidor que manipule o request do mashup continua vendo apenas o
+   proprio CNPJ, porque a reducao acontece antes de qualquer hypercube existir.
+
+   Personas:
+     ADMIN         - Tirolez corporativo / NIQ. Ve tudo (campo de reducao vazio).
+     DIRETOR       - Ve tudo, sem direito de edicao.
+     COORDENADOR   - Ve todos os distribuidores da sua regiao.
+     EXECUTIVO     - Ve os distribuidores da sua carteira.
+     DISTRIBUIDOR  - Ve exclusivamente o proprio codigo.
+
+   Campo de reducao: DISTRIBUIDORID (maiusculo, obrigatorio pelo Qlik).
+   Linha com DISTRIBUIDORID vazio = sem reducao = ve tudo.
+   ============================================================================= */
+
+IF $(vAplicarSectionAccess) THEN
+
+    TRACE >> Aplicando Section Access;
+
+    STAR IS *;
+
+    // -------------------------------------------------------------------------
+    // Campo de reducao no modelo. Precisa ser maiusculo e existir em uma tabela
+    // de dados para que a reducao propague pelas associacoes.
+    // -------------------------------------------------------------------------
+    LEFT JOIN (DIM_DISTRIBUIDOR)
+    LOAD
+        DistribuidorID,
+        Upper(DistribuidorID) AS DISTRIBUIDORID
+    RESIDENT DIM_DISTRIBUIDOR;
+
+    // -------------------------------------------------------------------------
+    // 1. Distribuidores - cada um ve apenas o proprio codigo
+    // -------------------------------------------------------------------------
+    TMP_SA:
+    LOAD
+        'USER'                         AS ACCESS,
+        Upper(DistribuidorEmailPortal) AS USERID,
+        Upper(DistribuidorID)          AS DISTRIBUIDORID,
+        'DISTRIBUIDOR'                 AS PERSONA
+    RESIDENT DIM_DISTRIBUIDOR
+    WHERE Len(Trim(DistribuidorEmailPortal)) > 0;
+
+    // -------------------------------------------------------------------------
+    // 2. Executivos - carteira de distribuidores
+    // -------------------------------------------------------------------------
+    MAP_SA_EXEC_EMAIL:
+    MAPPING LOAD %ChaveExecutivo, ExecutivoEmail RESIDENT DIM_EXECUTIVO;
+
+    CONCATENATE (TMP_SA)
+    LOAD
+        'USER'                                                          AS ACCESS,
+        Upper(ApplyMap('MAP_SA_EXEC_EMAIL', %ChaveExecutivo, ''))       AS USERID,
+        Upper(DistribuidorID)                                           AS DISTRIBUIDORID,
+        'EXECUTIVO'                                                     AS PERSONA
+    RESIDENT DIM_DISTRIBUIDOR
+    WHERE Len(Trim(ApplyMap('MAP_SA_EXEC_EMAIL', %ChaveExecutivo, ''))) > 0;
+
+    // -------------------------------------------------------------------------
+    // 3. Coordenadores regionais - todos os distribuidores da regiao
+    // -------------------------------------------------------------------------
+    MAP_SA_COORD_EMAIL:
+    MAPPING LOAD %ChaveRegiao, RegiaoCoordenadorEmail RESIDENT DIM_REGIAO;
+
+    CONCATENATE (TMP_SA)
+    LOAD
+        'USER'                                                          AS ACCESS,
+        Upper(ApplyMap('MAP_SA_COORD_EMAIL', %ChaveRegiao, ''))         AS USERID,
+        Upper(DistribuidorID)                                           AS DISTRIBUIDORID,
+        'COORDENADOR'                                                   AS PERSONA
+    RESIDENT DIM_DISTRIBUIDOR
+    WHERE Len(Trim(ApplyMap('MAP_SA_COORD_EMAIL', %ChaveRegiao, ''))) > 0;
+
+    // -------------------------------------------------------------------------
+    // 4. Administradores e diretoria - reducao vazia = acesso total
+    // -------------------------------------------------------------------------
+    CONCATENATE (TMP_SA)
+    LOAD
+        ACCESS,
+        Upper(USERID) AS USERID,
+        DISTRIBUIDORID,
+        PERSONA
+    INLINE [
+ACCESS, USERID, DISTRIBUIDORID, PERSONA
+ADMIN, admin.ppt@tirolez.com.br,      , ADMIN
+ADMIN, arquitetura.ppt@nielseniq.com, , ADMIN
+USER,  diretoria.comercial@tirolez.com.br, , DIRETOR
+];
+
+    // -------------------------------------------------------------------------
+    // Aplicacao
+    // OMIT: o distribuidor nao precisa (e nao deve) enxergar o e-mail de portal
+    // dos demais nem a base de sell-in de terceiros. A reducao ja resolve o
+    // escopo; o OMIT reduz a superficie de exposicao de coluna.
+    // -------------------------------------------------------------------------
+    SECTION ACCESS;
+
+    SA_PERMISSOES:
+    LOAD
+        ACCESS,
+        USERID,
+        DISTRIBUIDORID,
+        PERSONA
+    RESIDENT TMP_SA;
+
+    SECTION APPLICATION;
+
+    DROP TABLE TMP_SA;
+
+    LET vQtdSA = NoOfRows('SA_PERMISSOES');
+    TRACE >> Section Access: $(vQtdSA) permissoes carregadas;
+
+ELSE
+
+    TRACE >> Section Access DESLIGADO (vAplicarSectionAccess = 0). Nao promover assim para PRD.;
+
+END IF;

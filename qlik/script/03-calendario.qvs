@@ -1,0 +1,113 @@
+///$tab 03 - Calendario
+/* =============================================================================
+   DIM_DATA
+   -----------------------------------------------------------------------------
+   Alem do calendario padrao, entrega os campos que sustentam a PROJECAO de
+   fechamento do mes (DiasUteisDecorridos / DiasUteisTotais). Sem eles, dizer
+   "voce vai fechar em 87% da meta" no dia 12 e chute.
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// Feriados nacionais - impactam o ritmo de venda do canal indireto
+// -----------------------------------------------------------------------------
+FERIADO:
+LOAD Num(Date#(DataFeriado, 'DD/MM/YYYY')) AS %Feriado INLINE [
+DataFeriado
+01/01/2025
+03/03/2025
+04/03/2025
+18/04/2025
+21/04/2025
+01/05/2025
+19/06/2025
+07/09/2025
+12/10/2025
+02/11/2025
+15/11/2025
+20/11/2025
+25/12/2025
+01/01/2026
+16/02/2026
+17/02/2026
+03/04/2026
+21/04/2026
+01/05/2026
+04/06/2026
+07/09/2026
+12/10/2026
+02/11/2026
+15/11/2026
+20/11/2026
+25/12/2026
+];
+
+MAP_FERIADO: MAPPING LOAD %Feriado, 1 RESIDENT FERIADO;
+DROP TABLE FERIADO;
+
+// -----------------------------------------------------------------------------
+// Grade diaria
+// -----------------------------------------------------------------------------
+TMP_CALENDARIO:
+LOAD
+    Data,
+    // Dia util = seg a sex e nao feriado
+    If(Match(WeekDay(Data), 'sab', 'dom') = 0
+       AND ApplyMap('MAP_FERIADO', Num(Data), 0) = 0, 1, 0) AS FlagDiaUtil
+;
+LOAD
+    Date($(vDataInicioNum) + RecNo() - 1) AS Data
+AUTOGENERATE $(vDataFimNum) - $(vDataInicioNum) + 1;
+
+// Dias uteis totais e decorridos por mes
+DIAS_UTEIS_MES:
+LOAD
+    AnoMesNum,
+    Sum(FlagDiaUtil)        AS DiasUteisTotais,
+    Sum(DiaUtilDecorrido)   AS DiasUteisDecorridos,
+    Count(Data)             AS DiasNoMes
+GROUP BY AnoMesNum;
+LOAD
+    Num(Year(Data) * 100 + Month(Data))                  AS AnoMesNum,
+    Data,
+    FlagDiaUtil,
+    If(Num(Data) <= $(vDataHojeNum), FlagDiaUtil, 0)      AS DiaUtilDecorrido
+RESIDENT TMP_CALENDARIO;
+
+MAP_DU_TOTAIS:    MAPPING LOAD AnoMesNum, DiasUteisTotais     RESIDENT DIAS_UTEIS_MES;
+MAP_DU_DECORRIDOS:MAPPING LOAD AnoMesNum, DiasUteisDecorridos RESIDENT DIAS_UTEIS_MES;
+MAP_DIAS_MES:     MAPPING LOAD AnoMesNum, DiasNoMes           RESIDENT DIAS_UTEIS_MES;
+
+DROP TABLE DIAS_UTEIS_MES;
+
+// -----------------------------------------------------------------------------
+// DIM_DATA final
+// -----------------------------------------------------------------------------
+DIM_DATA:
+LOAD
+    Num(Data)                                            AS %ChaveData,
+    Data,
+    Year(Data)                                           AS Ano,
+    Month(Data)                                          AS Mes,
+    Text(Month(Data))                                    AS NomeMes,
+    Date(MonthStart(Data), 'YYYY-MM')                    AS AnoMes,
+    Date(MonthStart(Data), 'MMM/YY')                     AS AnoMesLabel,
+    Num(Year(Data) * 100 + Month(Data))                  AS AnoMesNum,
+    'T' & Ceil(Month(Data) / 3)                          AS Trimestre,
+    Day(Data)                                            AS DiaDoMes,
+    WeekDay(Data)                                        AS DiaSemana,
+    FlagDiaUtil,
+    ApplyMap('MAP_DIAS_MES',      Num(Year(Data) * 100 + Month(Data)), 30) AS DiasNoMes,
+    ApplyMap('MAP_DU_TOTAIS',     Num(Year(Data) * 100 + Month(Data)), 21) AS DiasUteisTotais,
+    ApplyMap('MAP_DU_DECORRIDOS', Num(Year(Data) * 100 + Month(Data)), 21) AS DiasUteisDecorridos,
+    If(Num(Year(Data) * 100 + Month(Data)) = $(vAnoMesAtual), 1, 0)        AS FlagMesAtual,
+    // Mes fechado = anterior ao corrente. Mes corrente nunca e fechado.
+    If(Num(Year(Data) * 100 + Month(Data)) < $(vAnoMesAtual), 1, 0)        AS FlagMesFechadoData,
+    // Deslocamento em meses em relacao ao mes corrente (0 = atual, -1 = anterior)
+    (Year(Data) * 12 + Month(Data))
+        - (Year('$(vDataHoje)') * 12 + Month('$(vDataHoje)'))              AS OffsetMes
+RESIDENT TMP_CALENDARIO;
+
+DROP TABLE TMP_CALENDARIO;
+
+LET vQtdDatas = NoOfRows('DIM_DATA');
+TRACE >> DIM_DATA carregada com $(vQtdDatas) dias;

@@ -1,0 +1,72 @@
+///$tab 00 - Main
+/* =============================================================================
+   PPT - PROGRAMA POR PERFORMANCE TIROLEZ
+   Script de carga - Qlik Sense Cloud SaaS
+   -----------------------------------------------------------------------------
+   ORDEM DAS ABAS (crie uma aba no editor de carga para cada arquivo):
+
+     00 - Main             .... este arquivo (orquestracao e diretivas globais)
+     01 - Variaveis        .... pesos, degraus, janelas e variaveis de expressao
+     02 - Fontes           .... LIB CONNECT reais + gerador de base mock
+     03 - Calendario       .... DIM_DATA
+     04 - Dimensoes        .... DIM_REGIAO, DIM_EXECUTIVO, DIM_DISTRIBUIDOR,
+                                DIM_PDV, DIM_PRODUTO
+     05 - Hero Map         .... DIM_HERO (composicao por regiao)
+     06 - Fato Sell Out    .... FACT_SELL_OUT + linhas-esqueleto
+     07 - Agregado Hero    .... AGG_HERO_PDV_MES
+     08 - PPT Mensal       .... FACT_PPT_MENSAL (metas, atingimento, premiacao)
+     09 - Oportunidades    .... OPP_POSITIVACAO, OPP_HERO
+     10 - Section Access   .... controle de acesso por persona
+     99 - Finalize         .... qualidade, log e limpeza
+
+   Alternativamente, suba os .qvs em um espaco de dados e use os Must_Include
+   comentados no final desta aba.
+   ============================================================================= */
+
+// ----------------------------------------------------------------------------
+// Diretivas regionais - pt-BR
+// ----------------------------------------------------------------------------
+SET ThousandSep       = '.';
+SET DecimalSep        = ',';
+SET MoneyThousandSep  = '.';
+SET MoneyDecimalSep   = ',';
+SET MoneyFormat       = 'R$ #.##0,00;-R$ #.##0,00';
+SET TimeFormat        = 'hh:mm:ss';
+SET DateFormat        = 'DD/MM/YYYY';
+SET TimestampFormat   = 'DD/MM/YYYY hh:mm:ss';
+SET FirstWeekDay      = 0;
+SET BrokenWeeks       = 0;
+SET ReferenceDay      = 4;
+SET FirstMonthOfYear  = 1;
+SET CollationLocale   = 'pt-BR';
+SET NumericalAbbreviation = '3:k;6:M;9:G;12:T';
+SET MonthNames        = 'jan;fev;mar;abr;mai;jun;jul;ago;set;out;nov;dez';
+SET LongMonthNames    = 'janeiro;fevereiro;marco;abril;maio;junho;julho;agosto;setembro;outubro;novembro;dezembro';
+SET DayNames          = 'seg;ter;qua;qui;sex;sab;dom';
+SET LongDayNames      = 'segunda-feira;terca-feira;quarta-feira;quinta-feira;sexta-feira;sabado;domingo';
+
+// ----------------------------------------------------------------------------
+// Controle de execucao
+// ----------------------------------------------------------------------------
+LET vExecInicio     = Now();
+LET vExecID         = Text(Date(Now(), 'YYYYMMDD_hhmmss'));
+
+TRACE ================================================================;
+TRACE  PPT TIROLEZ - inicio da carga  $(vExecID);
+TRACE ================================================================;
+
+/* Para uso com arquivos externos (espaco de dados "PPT"):
+
+$(Must_Include=lib://PPT_Scripts/01-variaveis.qvs);
+$(Must_Include=lib://PPT_Scripts/02-fontes.qvs);
+$(Must_Include=lib://PPT_Scripts/03-calendario.qvs);
+$(Must_Include=lib://PPT_Scripts/04-dimensoes.qvs);
+$(Must_Include=lib://PPT_Scripts/05-hero-map.qvs);
+$(Must_Include=lib://PPT_Scripts/06-fato-sellout.qvs);
+$(Must_Include=lib://PPT_Scripts/07-agregado-hero.qvs);
+$(Must_Include=lib://PPT_Scripts/08-fato-ppt-mensal.qvs);
+$(Must_Include=lib://PPT_Scripts/09-oportunidades.qvs);
+$(Must_Include=lib://PPT_Scripts/10-section-access.qvs);
+$(Must_Include=lib://PPT_Scripts/99-finalize.qvs);
+
+*/

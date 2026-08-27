@@ -1,0 +1,311 @@
+///$tab 08 - PPT Mensal
+/* =============================================================================
+   FACT_PPT_MENSAL  -  O LIVRO-RAZAO DA PREMIACAO
+   -----------------------------------------------------------------------------
+   Grao: Distribuidor x Mes. Uma linha por competencia.
+
+   Contem, lado a lado e auditaveis:
+     meta | realizado | % atingimento | fator do degrau | premio R$
+     gap para o proximo degrau | quanto R$ esse gap vale
+     projecao de fechamento (ritmo de dias uteis) e premio projetado
+
+   Regra (docs/03-regras-negocio.md):
+     Premio(KPI) = SellIn x Peso(KPI) x Fator(%Ating)
+     Fator: >=100% -> 1,00 | >=95% -> 0,70 | >=90% -> 0,50 | <90% -> 0
+     Pesos: Positivacao 0,70% | Volume 0,70% | Mix Hero 0,60%  (total 2,00%)
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 1. Realizado de Positivacao e Volume
+// -----------------------------------------------------------------------------
+TMP_REAL:
+LOAD
+    %ChaveDistMes,
+    Count(DISTINCT %ChavePDV)          AS RealPositivacao,
+    Sum(VolumeTon)                     AS RealVolumeTon,
+    Sum(ValorSellOut)                  AS RealValorSellOut
+GROUP BY %ChaveDistMes;
+LOAD
+    %ChaveDistMes,
+    %ChavePDV,
+    VolumeTon,
+    ValorSellOut
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1;
+
+// Garante uma linha para todo distribuidor x mes elegivel, inclusive os que
+// zeraram o mes (as linhas-esqueleto da aba 06 sustentam a chave).
+JOIN (TMP_REAL)
+LOAD DISTINCT
+    %ChaveDistMes
+RESIDENT FACT_SELL_OUT;
+
+// -----------------------------------------------------------------------------
+// 2. Realizado de Mix Hero
+// -----------------------------------------------------------------------------
+TMP_REAL_HERO:
+LOAD
+    HeroDistribuidorID & '|' & HeroAnoMes AS %ChaveDistMes,
+    Sum(FlagPdvHero)                      AS RealMixHero,
+    Count(%ChaveDistPdvMes)               AS RealPdvComCompra,
+    Sum(If(HeroQtdCategorias = 2, 1, 0))  AS RealPdvFalta1,
+    Sum(If(HeroQtdCategorias = 1, 1, 0))  AS RealPdvFalta2,
+    Sum(If(HeroQtdCategorias = 0, 1, 0))  AS RealPdvFalta3
+RESIDENT AGG_HERO_PDV_MES
+GROUP BY HeroDistribuidorID & '|' & HeroAnoMes;
+
+JOIN (TMP_REAL) LOAD * RESIDENT TMP_REAL_HERO;
+DROP TABLE TMP_REAL_HERO;
+
+// -----------------------------------------------------------------------------
+// 3. Base consolidada com identificadores legiveis
+// -----------------------------------------------------------------------------
+TMP_BASE:
+LOAD
+    %ChaveDistMes,
+    SubField(%ChaveDistMes, '|', 1)                       AS PPT_DistribuidorID,
+    SubField(%ChaveDistMes, '|', 2)                       AS PPT_AnoMes,
+    Num(SubField(SubField(%ChaveDistMes, '|', 2), '-', 1) * 100
+      + SubField(SubField(%ChaveDistMes, '|', 2), '-', 2)) AS PPT_AnoMesNum,
+    RangeSum(RealPositivacao, 0)                          AS RealPositivacao,
+    Round(RangeSum(RealVolumeTon, 0), 0.000001)           AS RealVolumeTon,
+    RangeSum(RealValorSellOut, 0)                         AS RealValorSellOut,
+    RangeSum(RealMixHero, 0)                              AS RealMixHero,
+    RangeSum(RealPdvComCompra, 0)                         AS RealPdvComCompra,
+    RangeSum(RealPdvFalta1, 0)                            AS RealPdvFalta1,
+    RangeSum(RealPdvFalta2, 0)                            AS RealPdvFalta2,
+    RangeSum(RealPdvFalta3, 0)                            AS RealPdvFalta3
+RESIDENT TMP_REAL;
+
+DROP TABLE TMP_REAL;
+
+/* =============================================================================
+   4. METAS E SELL-IN
+   ============================================================================= */
+
+IF $(vUseMockData) THEN
+
+    // ---- MOCK -------------------------------------------------------------
+    // A meta do mes M deriva do realizado do mes M-1 multiplicado por um fator
+    // deterministico entre 0,88 e 1,25. Isso distribui os distribuidores pelas
+    // quatro faixas (<90 / 90-95 / 95-100 / >=100) e da o que testar em QA.
+    TMP_BASE_ORD:
+    NOCONCATENATE
+    LOAD *
+    RESIDENT TMP_BASE
+    ORDER BY PPT_DistribuidorID, PPT_AnoMesNum;
+
+    DROP TABLE TMP_BASE;
+
+    TMP_METAS:
+    LOAD
+        %ChaveDistMes,
+        PPT_DistribuidorID,
+        PPT_AnoMes,
+        PPT_AnoMesNum,
+        RealPositivacao, RealVolumeTon, RealValorSellOut, RealMixHero,
+        RealPdvComCompra, RealPdvFalta1, RealPdvFalta2, RealPdvFalta3,
+        // Base = realizado do mes anterior do MESMO distribuidor
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealPositivacao), RealPositivacao)          AS BasePositivacao,
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealVolumeTon), RealVolumeTon)              AS BaseVolumeTon,
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealMixHero), RealMixHero)                  AS BaseMixHero,
+        If(PPT_DistribuidorID = Previous(PPT_DistribuidorID),
+           Previous(RealValorSellOut), RealValorSellOut)        AS BaseValorSellOut,
+        0.88 + $(vHash(PPT_AnoMesNum + RecNo() * 7, 12.98)) * 0.37 AS FatorMetaPos,
+        0.88 + $(vHash(PPT_AnoMesNum + RecNo() * 11, 15.31)) * 0.37 AS FatorMetaVol,
+        0.85 + $(vHash(PPT_AnoMesNum + RecNo() * 13, 18.77)) * 0.40 AS FatorMetaHero
+    RESIDENT TMP_BASE_ORD;
+
+    DROP TABLE TMP_BASE_ORD;
+
+    TMP_BASE:
+    NOCONCATENATE
+    LOAD
+        %ChaveDistMes, PPT_DistribuidorID, PPT_AnoMes, PPT_AnoMesNum,
+        RealPositivacao, RealVolumeTon, RealValorSellOut, RealMixHero,
+        RealPdvComCompra, RealPdvFalta1, RealPdvFalta2, RealPdvFalta3,
+        RangeMax(1, Round(BasePositivacao * FatorMetaPos))          AS MetaPositivacao,
+        RangeMax(0.001, Round(BaseVolumeTon * FatorMetaVol, 0.001)) AS MetaVolumeTon,
+        RangeMax(1, Round(BaseMixHero * FatorMetaHero))             AS MetaMixHero,
+        // Sell-in mock = 78% do sell-out. No mes corrente usa o mes anterior
+        // (o sell-in do mes ainda esta em curso).
+        Round(If(PPT_AnoMesNum = $(vAnoMesAtual),
+                 BaseValorSellOut, RealValorSellOut) * 0.78, 0.01)  AS SellInValor,
+        If(PPT_AnoMesNum < $(vAnoMesAtual), 1, 0)                   AS FlagMesFechado
+    RESIDENT TMP_METAS;
+
+    DROP TABLE TMP_METAS;
+
+ELSE
+
+    // ---- PRODUCAO ---------------------------------------------------------
+    LEFT JOIN (TMP_BASE)
+    LOAD
+        DistribuidorID & '|' & AnoMes AS %ChaveDistMes,
+        MetaPositivacao,
+        MetaVolumeTon,
+        MetaMixHero
+    RESIDENT SRC_META;
+    DROP TABLE SRC_META;
+
+    LEFT JOIN (TMP_BASE)
+    LOAD
+        DistribuidorID & '|' & AnoMes AS %ChaveDistMes,
+        SellInValor,
+        FlagMesFechado
+    RESIDENT SRC_SELLIN;
+    DROP TABLE SRC_SELLIN;
+
+END IF;
+
+/* =============================================================================
+   5. ATINGIMENTO, DEGRAUS, PREMIACAO, GAPS E PROJECAO
+   -----------------------------------------------------------------------------
+   NOTA DE SINTAXE: $(vFatorPremio(x)) so aceita um argumento SEM virgulas -
+   a expansao com parametros quebra o argumento em cada virgula. Por isso todo
+   percentual de atingimento e materializado como CAMPO nas cargas precedentes
+   antes de ser passado para as funcoes de degrau.
+   ============================================================================= */
+
+FACT_PPT_MENSAL:
+LOAD
+    %ChaveDistMes,
+    PPT_DistribuidorID,
+    PPT_AnoMes,
+    PPT_AnoMesNum,
+    FlagMesFechado,
+    SellInValor,
+
+    // --- Metas e realizado ---------------------------------------------------
+    MetaPositivacao, MetaVolumeTon, MetaMixHero,
+    RealPositivacao, RealVolumeTon, RealMixHero,
+    RealPdvComCompra, RealPdvFalta1, RealPdvFalta2, RealPdvFalta3,
+    RealValorSellOut,
+
+    // --- Atingimento ---------------------------------------------------------
+    AtingPositivacao, AtingVolume, AtingMixHero,
+    Round(RangeSum(AtingPositivacao, AtingVolume, AtingMixHero) / 3, 0.0001) AS AtingMedio,
+
+    // --- Fator do degrau -----------------------------------------------------
+    $(vFatorPremio(AtingPositivacao))                     AS FatorPositivacao,
+    $(vFatorPremio(AtingVolume))                          AS FatorVolume,
+    $(vFatorPremio(AtingMixHero))                         AS FatorMixHero,
+
+    // --- Premiacao R$ --------------------------------------------------------
+    Round(SellInValor * $(vPesoPositivacao) * $(vFatorPremio(AtingPositivacao)), 0.01) AS PremioPositivacao,
+    Round(SellInValor * $(vPesoVolume)      * $(vFatorPremio(AtingVolume)),      0.01) AS PremioVolume,
+    Round(SellInValor * $(vPesoMixHero)     * $(vFatorPremio(AtingMixHero)),     0.01) AS PremioMixHero,
+    Round(SellInValor * ($(vPesoPositivacao) * $(vFatorPremio(AtingPositivacao))
+                       + $(vPesoVolume)      * $(vFatorPremio(AtingVolume))
+                       + $(vPesoMixHero)     * $(vFatorPremio(AtingMixHero))), 0.01)  AS PremioTotal,
+    Round(SellInValor * $(vPesoTotal), 0.01)              AS PremioPotencialTotal,
+    // Dinheiro deixado na mesa
+    Round(SellInValor * $(vPesoTotal)
+        - SellInValor * ($(vPesoPositivacao) * $(vFatorPremio(AtingPositivacao))
+                       + $(vPesoVolume)      * $(vFatorPremio(AtingVolume))
+                       + $(vPesoMixHero)     * $(vFatorPremio(AtingMixHero))), 0.01)  AS PremioNaoCapturado,
+
+    // --- Proximo degrau: o gap acionavel -------------------------------------
+    ProxDegrauPositivacao, ProxDegrauVolume, ProxDegrauMixHero,
+
+    // Quantos PDVs / toneladas faltam para cruzar o proximo degrau
+    If(ProxDegrauPositivacao = 0, 0,
+       RangeMax(0, Ceil(MetaPositivacao * ProxDegrauPositivacao) - RealPositivacao))    AS GapPositivacaoUn,
+    If(ProxDegrauVolume = 0, 0,
+       Round(RangeMax(0, MetaVolumeTon * ProxDegrauVolume - RealVolumeTon), 0.001))     AS GapVolumeTon,
+    If(ProxDegrauMixHero = 0, 0,
+       RangeMax(0, Ceil(MetaMixHero * ProxDegrauMixHero) - RealMixHero))                AS GapMixHeroUn,
+
+    // Quanto R$ vale cruzar cada proximo degrau
+    Round(If(ProxDegrauPositivacao = 0, 0, SellInValor * $(vPesoPositivacao)
+        * ($(vFatorProximoDegrau(AtingPositivacao)) - $(vFatorPremio(AtingPositivacao)))), 0.01) AS GanhoProxDegrauPositivacao,
+    Round(If(ProxDegrauVolume = 0, 0, SellInValor * $(vPesoVolume)
+        * ($(vFatorProximoDegrau(AtingVolume)) - $(vFatorPremio(AtingVolume)))), 0.01)           AS GanhoProxDegrauVolume,
+    Round(If(ProxDegrauMixHero = 0, 0, SellInValor * $(vPesoMixHero)
+        * ($(vFatorProximoDegrau(AtingMixHero)) - $(vFatorPremio(AtingMixHero)))), 0.01)         AS GanhoProxDegrauMixHero,
+    Round(If(ProxDegrauPositivacao = 0, 0, SellInValor * $(vPesoPositivacao)
+             * ($(vFatorProximoDegrau(AtingPositivacao)) - $(vFatorPremio(AtingPositivacao))))
+        + If(ProxDegrauVolume = 0, 0, SellInValor * $(vPesoVolume)
+             * ($(vFatorProximoDegrau(AtingVolume)) - $(vFatorPremio(AtingVolume))))
+        + If(ProxDegrauMixHero = 0, 0, SellInValor * $(vPesoMixHero)
+             * ($(vFatorProximoDegrau(AtingMixHero)) - $(vFatorPremio(AtingMixHero)))), 0.01)    AS GanhoProxDegrauTotal,
+
+    // --- Gap ate 100% (teto da premiacao) ------------------------------------
+    RangeMax(0, MetaPositivacao - RealPositivacao)                        AS Gap100PositivacaoUn,
+    Round(RangeMax(0, MetaVolumeTon - RealVolumeTon), 0.001)              AS Gap100VolumeTon,
+    RangeMax(0, MetaMixHero - RealMixHero)                                AS Gap100MixHeroUn,
+
+    // --- Projecao de fechamento (ritmo de dias uteis) ------------------------
+    DiasUteisDecorridos, DiasUteisTotais,
+    Round(ProjPositivacao)                                               AS ProjPositivacao,
+    Round(ProjVolumeTon, 0.001)                                          AS ProjVolumeTon,
+    Round(ProjMixHero)                                                   AS ProjMixHero,
+    AtingProjPositivacao, AtingProjVolume, AtingProjMixHero,
+    Round(SellInValor * ($(vPesoPositivacao) * $(vFatorPremio(AtingProjPositivacao))
+                       + $(vPesoVolume)      * $(vFatorPremio(AtingProjVolume))
+                       + $(vPesoMixHero)     * $(vFatorPremio(AtingProjMixHero))), 0.01) AS PremioProjetado,
+
+    // --- Semaforo do distribuidor -------------------------------------------
+    // Olha a PROJECAO, nao o realizado. Avisar no dia 30 que o distribuidor
+    // perdeu a premiacao nao e um alerta, e um obituario.
+    If(FatorProjMin = 0, 'Risco alto',
+       If(FatorProjMin < 1, 'Atencao', 'No alvo'))                        AS PPT_StatusRisco,
+    FatorProjMin
+;
+LOAD
+    *,
+    RangeMin($(vFatorPremio(AtingProjPositivacao)),
+             $(vFatorPremio(AtingProjVolume)),
+             $(vFatorPremio(AtingProjMixHero)))                           AS FatorProjMin,
+    $(vProximoDegrau(AtingPositivacao))                                   AS ProxDegrauPositivacao,
+    $(vProximoDegrau(AtingVolume))                                        AS ProxDegrauVolume,
+    $(vProximoDegrau(AtingMixHero))                                       AS ProxDegrauMixHero
+;
+LOAD
+    *,
+    Round(If(MetaPositivacao > 0, ProjPositivacao / MetaPositivacao, 0), 0.0001) AS AtingProjPositivacao,
+    Round(If(MetaVolumeTon   > 0, ProjVolumeTon   / MetaVolumeTon,   0), 0.0001) AS AtingProjVolume,
+    Round(If(MetaMixHero     > 0, ProjMixHero     / MetaMixHero,     0), 0.0001) AS AtingProjMixHero
+;
+LOAD
+    *,
+    // Projecao linear pelo ritmo de dias uteis. Em mes fechado
+    // DiasUteisDecorridos = DiasUteisTotais, logo projecao = realizado.
+    If(DiasUteisDecorridos > 0, RealPositivacao / DiasUteisDecorridos * DiasUteisTotais, RealPositivacao) AS ProjPositivacao,
+    If(DiasUteisDecorridos > 0, RealVolumeTon   / DiasUteisDecorridos * DiasUteisTotais, RealVolumeTon)   AS ProjVolumeTon,
+    If(DiasUteisDecorridos > 0, RealMixHero     / DiasUteisDecorridos * DiasUteisTotais, RealMixHero)     AS ProjMixHero
+;
+LOAD
+    *,
+    Round(If(MetaPositivacao > 0, RealPositivacao / MetaPositivacao, 0), 0.0001) AS AtingPositivacao,
+    Round(If(MetaVolumeTon   > 0, RealVolumeTon   / MetaVolumeTon,   0), 0.0001) AS AtingVolume,
+    Round(If(MetaMixHero     > 0, RealMixHero     / MetaMixHero,     0), 0.0001) AS AtingMixHero,
+    Num(ApplyMap('MAP_DU_DECORRIDOS', PPT_AnoMesNum, 21))                        AS DiasUteisDecorridos,
+    Num(ApplyMap('MAP_DU_TOTAIS',     PPT_AnoMesNum, 21))                        AS DiasUteisTotais
+RESIDENT TMP_BASE
+WHERE Len(Trim(PPT_DistribuidorID)) > 0;
+
+DROP TABLE TMP_BASE;
+
+LET vLinhasPPT = NoOfRows('FACT_PPT_MENSAL');
+TRACE >> FACT_PPT_MENSAL: $(vLinhasPPT) competencias distribuidor x mes;
+
+// Mapas usados na aba 09 para converter oportunidade em R$
+MAP_PPT_SELLIN:     MAPPING LOAD %ChaveDistMes, SellInValor       RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_METAHERO:   MAPPING LOAD %ChaveDistMes, MetaMixHero       RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_REALHERO:   MAPPING LOAD %ChaveDistMes, RealMixHero       RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_METAPOS:    MAPPING LOAD %ChaveDistMes, MetaPositivacao   RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_REALPOS:    MAPPING LOAD %ChaveDistMes, RealPositivacao   RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_METAVOL:    MAPPING LOAD %ChaveDistMes, MetaVolumeTon     RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_REALVOL:    MAPPING LOAD %ChaveDistMes, RealVolumeTon     RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_ATINGHERO:  MAPPING LOAD %ChaveDistMes, AtingMixHero      RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_ATINGPOS:   MAPPING LOAD %ChaveDistMes, AtingPositivacao  RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GAPHERO:    MAPPING LOAD %ChaveDistMes, GapMixHeroUn      RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GANHOHERO:  MAPPING LOAD %ChaveDistMes, GanhoProxDegrauMixHero    RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GAPPOS:     MAPPING LOAD %ChaveDistMes, GapPositivacaoUn  RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GANHOPOS:   MAPPING LOAD %ChaveDistMes, GanhoProxDegrauPositivacao RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GAPVOL:     MAPPING LOAD %ChaveDistMes, GapVolumeTon      RESIDENT FACT_PPT_MENSAL;
+MAP_PPT_GANHOVOL:   MAPPING LOAD %ChaveDistMes, GanhoProxDegrauVolume     RESIDENT FACT_PPT_MENSAL;

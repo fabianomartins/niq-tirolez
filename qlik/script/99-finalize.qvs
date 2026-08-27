@@ -1,0 +1,153 @@
+///$tab 99 - Finalize
+/* =============================================================================
+   QUALIDADE, TAGS, PERSISTENCIA E LOG
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 1. Testes de qualidade que rodam a cada carga
+//    Falha aqui derruba a carga. Numero errado que chega na tela e pior do que
+//    carga que nao roda - especialmente quando o numero define pagamento.
+// -----------------------------------------------------------------------------
+
+// 1.1 Toda venda tem chave Hero resolvida
+TMP_QA1:
+LOAD Count(FlagVenda) AS QtdSemHero
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1 AND Len(Trim(%ChaveHero)) = 0;
+LET vQA1 = Peek('QtdSemHero', 0, 'TMP_QA1');
+DROP TABLE TMP_QA1;
+
+IF $(vQA1) > 0 THEN
+    CONCATENATE (QA_REJEITADOS)
+    LOAD 'FACT_SELL_OUT' AS QA_Tabela,
+         'Linha de venda sem %ChaveHero resolvida' AS QA_Motivo,
+         '-' AS QA_Valor, $(vQA1) AS QA_Ocorrencias AUTOGENERATE 1;
+    TRACE !! ALERTA: $(vQA1) linhas de venda sem chave Hero;
+END IF;
+
+// 1.2 Subcategorias de produto que NAO existem na composicao Hero.
+//     Nao e erro (existem SKUs fora do Mix), mas uma subcategoria Hero grafada
+//     errado apareceria aqui - e e assim que o Mix Hero quebra em silencio.
+TMP_QA2:
+LOAD
+    ProdutoSubcategoria,
+    Count(CodProduto) AS QtdSkus
+RESIDENT DIM_PRODUTO
+WHERE ApplyMap('MAP_HERO_CATNUM', 'SP|' & ProdutoSubcategoria, 0) = 0
+  AND ApplyMap('MAP_HERO_CATNUM', 'DEMAIS|' & ProdutoSubcategoria, 0) = 0
+GROUP BY ProdutoSubcategoria;
+
+CONCATENATE (QA_REJEITADOS)
+LOAD
+    'DIM_PRODUTO'                                  AS QA_Tabela,
+    'Subcategoria fora da composicao Hero (verificar grafia)' AS QA_Motivo,
+    ProdutoSubcategoria                            AS QA_Valor,
+    QtdSkus                                        AS QA_Ocorrencias
+RESIDENT TMP_QA2;
+DROP TABLE TMP_QA2;
+
+// 1.3 Premiacao nunca pode passar de 2% do sell-in
+TMP_QA3:
+LOAD Count(%ChaveDistMes) AS QtdEstouro
+RESIDENT FACT_PPT_MENSAL
+WHERE PremioTotal > PremioPotencialTotal + 0.01;
+LET vQA3 = Peek('QtdEstouro', 0, 'TMP_QA3');
+DROP TABLE TMP_QA3;
+
+IF $(vQA3) > 0 THEN
+    TRACE !! FALHA CRITICA: $(vQA3) competencias com premio acima do teto de 2%;
+    // Em PRD, descomente para abortar a carga:
+    // EXIT SCRIPT;
+END IF;
+
+// 1.4 Atingimento negativo ou meta zerada
+TMP_QA4:
+LOAD Count(%ChaveDistMes) AS QtdMetaZero
+RESIDENT FACT_PPT_MENSAL
+WHERE MetaPositivacao <= 0 OR MetaVolumeTon <= 0 OR MetaMixHero <= 0;
+LET vQA4 = Peek('QtdMetaZero', 0, 'TMP_QA4');
+DROP TABLE TMP_QA4;
+
+IF $(vQA4) > 0 THEN
+    CONCATENATE (QA_REJEITADOS)
+    LOAD 'FACT_PPT_MENSAL' AS QA_Tabela,
+         'Competencia sem meta valida (divisao por zero evitada)' AS QA_Motivo,
+         '-' AS QA_Valor, $(vQA4) AS QA_Ocorrencias AUTOGENERATE 1;
+END IF;
+
+// -----------------------------------------------------------------------------
+// 2. Tags de campo - organiza o seletor de campos e o Insight Advisor
+// -----------------------------------------------------------------------------
+TAG FIELDS %ChaveData, %ChavePDV, %ChaveDistribuidor, %ChaveProduto,
+           %ChaveHero, %ChaveRegiao, %ChaveExecutivo,
+           %ChaveDistMes, %ChaveDistPdvMes
+WITH '$hidden', '$key';
+
+TAG FIELDS MetaPositivacao, MetaVolumeTon, MetaMixHero WITH '$meta-ppt';
+TAG FIELDS RealPositivacao, RealVolumeTon, RealMixHero WITH '$realizado-ppt';
+TAG FIELDS PremioPositivacao, PremioVolume, PremioMixHero, PremioTotal WITH '$premiacao';
+TAG FIELD  Data WITH '$date';
+TAG FIELD  AnoMes WITH '$date';
+
+// -----------------------------------------------------------------------------
+// 3. Persistencia da camada model (opcional)
+// -----------------------------------------------------------------------------
+IF $(vGravarQVD) THEN
+
+    TRACE >> Gravando QVDs em $(vPastaQVD);
+
+    STORE DIM_DATA          INTO [$(vPastaQVD)DIM_DATA.qvd]          (qvd);
+    STORE DIM_PDV           INTO [$(vPastaQVD)DIM_PDV.qvd]           (qvd);
+    STORE DIM_DISTRIBUIDOR  INTO [$(vPastaQVD)DIM_DISTRIBUIDOR.qvd]  (qvd);
+    STORE DIM_PRODUTO       INTO [$(vPastaQVD)DIM_PRODUTO.qvd]       (qvd);
+    STORE DIM_REGIAO        INTO [$(vPastaQVD)DIM_REGIAO.qvd]        (qvd);
+    STORE DIM_EXECUTIVO     INTO [$(vPastaQVD)DIM_EXECUTIVO.qvd]     (qvd);
+    STORE DIM_HERO          INTO [$(vPastaQVD)DIM_HERO.qvd]          (qvd);
+    STORE FACT_SELL_OUT     INTO [$(vPastaQVD)FACT_SELL_OUT.qvd]     (qvd);
+    STORE AGG_HERO_PDV_MES  INTO [$(vPastaQVD)AGG_HERO_PDV_MES.qvd]  (qvd);
+    STORE OPP_POSITIVACAO   INTO [$(vPastaQVD)OPP_POSITIVACAO.qvd]   (qvd);
+    STORE OPP_RECUPERACAO   INTO [$(vPastaQVD)OPP_RECUPERACAO.qvd]   (qvd);
+    STORE OPP_HERO          INTO [$(vPastaQVD)OPP_HERO.qvd]          (qvd);
+
+    // Livro-razao da premiacao versionado por execucao: auditoria de mes pago
+    STORE FACT_PPT_MENSAL   INTO [$(vPastaQVD)FACT_PPT_MENSAL.qvd]   (qvd);
+    STORE FACT_PPT_MENSAL   INTO [$(vPastaQVD)audit/FACT_PPT_MENSAL_$(vExecID).qvd] (qvd);
+
+END IF;
+
+// -----------------------------------------------------------------------------
+// 4. Log de execucao (ilha - visivel no painel de administracao do app)
+// -----------------------------------------------------------------------------
+LOG_CARGA:
+LOAD
+    '$(vExecID)'                          AS LogExecID,
+    Timestamp('$(vExecInicio)')           AS LogInicio,
+    Timestamp(Now())                      AS LogFim,
+    Interval(Now() - '$(vExecInicio)', 'hh:mm:ss') AS LogDuracao,
+    $(vUseMockData)                       AS LogModoMock,
+    $(vAplicarSectionAccess)              AS LogSectionAccess,
+    $(vMesesHistorico)                    AS LogMesesHistorico,
+    '$(vDataInicio)'                      AS LogJanelaInicio,
+    '$(vDataFim)'                         AS LogJanelaFim
+AUTOGENERATE 1;
+
+LEFT JOIN (LOG_CARGA)
+LOAD
+    '$(vExecID)'                          AS LogExecID,
+    $(vLinhasFatoTotal)                   AS LogLinhasFato,
+    $(vLinhasHero)                        AS LogLinhasHero,
+    $(vLinhasPPT)                         AS LogLinhasPPT,
+    $(vLinhasOppPos)                      AS LogLinhasOppPositivacao,
+    $(vLinhasOppRec)                      AS LogLinhasOppRecuperacao,
+    $(vLinhasOppHero)                     AS LogLinhasOppHero
+AUTOGENERATE 1;
+
+TRACE ================================================================;
+TRACE  PPT TIROLEZ - carga concluida;
+TRACE   Fato ................ $(vLinhasFatoTotal) linhas;
+TRACE   Hero PDV x mes ...... $(vLinhasHero) linhas;
+TRACE   Competencias PPT .... $(vLinhasPPT) linhas;
+TRACE   Oport. positivacao .. $(vLinhasOppPos) linhas;
+TRACE   Oport. recuperacao .. $(vLinhasOppRec) linhas;
+TRACE   Oport. Hero ......... $(vLinhasOppHero) linhas;
+TRACE ================================================================;

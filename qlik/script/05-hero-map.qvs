@@ -1,0 +1,100 @@
+///$tab 05 - Hero Map
+/* =============================================================================
+   DIM_HERO - COMPOSICAO DO MIX HERO POR REGIAO
+   -----------------------------------------------------------------------------
+   Um PDV e MIX HERO no mes quando comprou pelo menos 1 SKU de CADA uma das 3
+   categorias Hero. Nao precisa comprar todos os SKUs da categoria.
+
+   A composicao da Categoria 3 muda por regiao:
+       SP      -> Fatiados (Mussarela Fatiada, Mussarela Light, Prato Fatiado,
+                            Prato Light)
+       DEMAIS  -> Manteiga (Manteiga Com Sal, Manteiga Sem Sal)
+
+   Por isso a chave e COMPOSTA: %ChaveHero = RegiaoHero & '|' & Subcategoria.
+   O mesmo SKU "Manteiga Com Sal" conta Hero no Sul e NAO conta em Sao Paulo.
+   -----------------------------------------------------------------------------
+   ALTERAR A COMPOSICAO = alterar apenas o INLINE abaixo. Nenhuma expressao de
+   front-end conhece nomes de SKU.
+   ============================================================================= */
+
+HERO_COMPOSICAO:
+LOAD
+    RegiaoHero,
+    Capitalize(Trim(ProdutoSubcategoria)) AS ProdutoSubcategoria,
+    CategoriaHeroNum,
+    CategoriaHero,
+    'C' & CategoriaHeroNum                AS CategoriaHeroCurta
+INLINE [
+RegiaoHero, ProdutoSubcategoria, CategoriaHeroNum, CategoriaHero
+SP,     Creme Ricota,       1, Cat 1 - Ricota
+SP,     Creme Ricota Light, 1, Cat 1 - Ricota
+SP,     Requeijao,          2, Cat 2 - Requeijao
+SP,     Requeijao Light,    2, Cat 2 - Requeijao
+SP,     Mussarela Fatiada,  3, Cat 3 - Fatiados
+SP,     Mussarela Light,    3, Cat 3 - Fatiados
+SP,     Prato Fatiado,      3, Cat 3 - Fatiados
+SP,     Prato Light,        3, Cat 3 - Fatiados
+DEMAIS, Creme Ricota,       1, Cat 1 - Ricota
+DEMAIS, Creme Ricota Light, 1, Cat 1 - Ricota
+DEMAIS, Requeijao,          2, Cat 2 - Requeijao
+DEMAIS, Requeijao Light,    2, Cat 2 - Requeijao
+DEMAIS, Manteiga Com Sal,   3, Cat 3 - Manteiga
+DEMAIS, Manteiga Sem Sal,   3, Cat 3 - Manteiga
+];
+
+// -----------------------------------------------------------------------------
+// Mapa usado pela tabela fato para resolver a categoria Hero de cada linha
+// -----------------------------------------------------------------------------
+MAP_HERO:
+MAPPING LOAD
+    RegiaoHero & '|' & ProdutoSubcategoria,
+    RegiaoHero & '|' & ProdutoSubcategoria
+RESIDENT HERO_COMPOSICAO;
+
+// -----------------------------------------------------------------------------
+// DIM_HERO
+// A linha 'NAOHERO' evita chave nula no fato: toda venda tem %ChaveHero.
+// -----------------------------------------------------------------------------
+DIM_HERO:
+LOAD
+    RegiaoHero & '|' & ProdutoSubcategoria AS %ChaveHero,
+    CategoriaHero,
+    CategoriaHeroNum,
+    CategoriaHeroCurta,
+    RegiaoHero                             AS HeroRegiaoComposicao,
+    1                                      AS FlagHero
+RESIDENT HERO_COMPOSICAO;
+
+CONCATENATE (DIM_HERO)
+LOAD * INLINE [
+%ChaveHero, CategoriaHero, CategoriaHeroNum, CategoriaHeroCurta, HeroRegiaoComposicao, FlagHero
+NAOHERO, Fora do Mix Hero, 0, --, TODAS, 0
+];
+
+// -----------------------------------------------------------------------------
+// Grade de categorias esperadas por regiao - usada em "09 - Oportunidades"
+// para saber QUAL categoria falta em cada PDV. Ilha temporaria de script.
+// -----------------------------------------------------------------------------
+HERO_CATEGORIAS_REGIAO:
+LOAD DISTINCT
+    RegiaoHero,
+    CategoriaHeroNum,
+    CategoriaHero
+RESIDENT HERO_COMPOSICAO;
+
+MAP_HERO_CATNUM:
+MAPPING LOAD
+    RegiaoHero & '|' & ProdutoSubcategoria,
+    CategoriaHeroNum
+RESIDENT HERO_COMPOSICAO;
+
+MAP_HERO_CATLABEL:
+MAPPING LOAD DISTINCT
+    RegiaoHero & '|' & CategoriaHeroNum,
+    CategoriaHero
+RESIDENT HERO_COMPOSICAO;
+
+DROP TABLE HERO_COMPOSICAO;
+
+LET vQtdHeroSku = NoOfRows('DIM_HERO') - 1;
+TRACE >> DIM_HERO: $(vQtdHeroSku) combinacoes regiao x subcategoria mapeadas;

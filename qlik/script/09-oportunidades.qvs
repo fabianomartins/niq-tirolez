@@ -1,0 +1,473 @@
+///$tab 09 - Oportunidades
+/* =============================================================================
+   MOTOR DE OPORTUNIDADES
+   -----------------------------------------------------------------------------
+   Produz as tres tabelas que sustentam as Telas 2, 3, 4 e 5:
+
+     OPP_POSITIVACAO  - PDV que comprou nos ultimos 3 meses e NAO comprou no mes
+     OPP_RECUPERACAO  - PDV que comprou, mas abaixo da propria media historica
+     OPP_HERO         - PDV incompleto + qual SKU vender + quanto isso vale
+
+   Todas respondem as mesmas perguntas: onde atuar, qual PDV, qual SKU, quanto
+   isso aproxima da meta e quanto aumenta a premiacao.
+   ============================================================================= */
+
+// Indice continuo de mes: idx = Ano * 12 + (Mes - 1). Aritmetica de janela sem
+// dor de cabeca com virada de ano.
+LET vIdxAtual   = Year('$(vDataHoje)') * 12 + Month('$(vDataHoje)') - 1;
+LET vIdxInicio  = $(vIdxAtual) - $(vMesesHistorico) + 1;
+// So faz sentido calcular oportunidade a partir do 4o mes da janela (precisa
+// de 3 meses de historico atras dele).
+LET vIdxPrimeiroAlvo = $(vIdxInicio) + $(vJanelaRecenciaMeses);
+
+/* =============================================================================
+   1. TABELA DE PRESENCA (PDV x mes com compra)
+   ============================================================================= */
+TMP_PRESENCA:
+LOAD
+    HeroDistribuidorID                                       AS OppDist,
+    HeroCNPJ                                                 AS OppCNPJ,
+    SubField(HeroAnoMes, '-', 1) * 12 + SubField(HeroAnoMes, '-', 2) - 1 AS PresIdx,
+    HeroVolumeTotalTon                                       AS PresVolTon,
+    HeroVolumeTotalValor                                     AS PresValor,
+    FlagPdvHero                                              AS PresHero,
+    HeroUltimaCompraNum                                      AS PresUltimaCompraNum
+RESIDENT AGG_HERO_PDV_MES;
+
+// Chave de presenca - usada como anti-join (Exists) mais adiante
+TMP_CHAVE_PRESENCA:
+LOAD DISTINCT
+    OppDist & '|' & OppCNPJ & '|' & PresIdx                  AS %ChavePresenca
+RESIDENT TMP_PRESENCA;
+
+MAP_PRESENCA_VOL:
+MAPPING LOAD OppDist & '|' & OppCNPJ & '|' & PresIdx, PresVolTon RESIDENT TMP_PRESENCA;
+
+/* =============================================================================
+   2. FAN-OUT DA JANELA DE 3 MESES
+   -----------------------------------------------------------------------------
+   Cada mes com compra projeta 3 meses-alvo a frente (m+1, m+2, m+3). Agregando
+   por (distribuidor, PDV, mes-alvo) obtem-se, de uma vez, a media dos ultimos 3
+   meses, a frequencia e a ultima compra - para TODOS os meses da janela.
+   ============================================================================= */
+TMP_FANOUT:
+NOCONCATENATE
+LOAD * RESIDENT TMP_PRESENCA;
+
+JOIN (TMP_FANOUT)
+LOAD RecNo() AS kOffset AUTOGENERATE $(vJanelaRecenciaMeses);
+
+TMP_OPP_BASE:
+LOAD
+    OppDist,
+    OppCNPJ,
+    AlvoIdx,
+    Count(DISTINCT PresIdx)                                  AS OppMesesAtivoU3M,
+    // Media sobre a JANELA (divide por 3), nao sobre os meses ativos.
+    // E o volume mensal que o PDV representava - leitura conservadora.
+    Sum(PresVolTon) / $(vJanelaRecenciaMeses)                AS OppMediaU3MTon,
+    Sum(PresValor)  / $(vJanelaRecenciaMeses)                AS OppMediaU3MValor,
+    Max(PresUltimaCompraNum)                                 AS OppUltimaCompraNum,
+    Max(PresHero)                                            AS OppEraHero
+GROUP BY OppDist, OppCNPJ, AlvoIdx;
+LOAD
+    OppDist,
+    OppCNPJ,
+    PresIdx,
+    PresIdx + kOffset                                        AS AlvoIdx,
+    PresVolTon,
+    PresValor,
+    PresHero,
+    PresUltimaCompraNum
+RESIDENT TMP_FANOUT
+WHERE PresIdx + kOffset >= $(vIdxPrimeiroAlvo)
+  AND PresIdx + kOffset <= $(vIdxAtual);
+
+DROP TABLE TMP_FANOUT;
+
+/* =============================================================================
+   3. OPP_POSITIVACAO - quem sumiu
+   ============================================================================= */
+TMP_OPP_POS:
+LOAD
+    OppDist,
+    OppCNPJ,
+    AlvoIdx,
+    OppAnoMes,
+    OppDist & '|' & OppCNPJ & '|' & OppAnoMes                AS %ChaveDistPdvMes,
+    OppDist & '|' & OppAnoMes                                AS ChaveDistMesAux,
+    OppMesesAtivoU3M,
+    Round(OppMediaU3MTon, 0.000001)                          AS OppPos_MediaU3MTon,
+    Round(OppMediaU3MValor, 0.01)                            AS OppPos_MediaU3MValor,
+    Date(OppUltimaCompraNum)                                 AS OppPos_UltimaCompra,
+    OppEraHero                                               AS OppPos_EraHero,
+    // Data de referencia: hoje no mes corrente, fim do mes nos meses fechados
+    RangeMax(0, If(AlvoIdx = $(vIdxAtual), $(vDataHojeNum),
+                   Num(MonthEnd(MakeDate(Floor(AlvoIdx / 12), Mod(AlvoIdx, 12) + 1, 1))))
+                - OppUltimaCompraNum)                        AS OppPos_DiasSemComprar
+;
+LOAD
+    *,
+    Date(MakeDate(Floor(AlvoIdx / 12), Mod(AlvoIdx, 12) + 1, 1), 'YYYY-MM') AS OppAnoMes
+RESIDENT TMP_OPP_BASE
+// A definicao do problema: comprou na janela, NAO comprou no mes-alvo
+WHERE NOT Exists(%ChavePresenca, OppDist & '|' & OppCNPJ & '|' & AlvoIdx);
+
+// Normalizador de volume por distribuidor x mes (score comparavel dentro da
+// carteira do distribuidor, nao contra a base inteira)
+TMP_MAX_POS:
+LOAD
+    ChaveDistMesAux                                          AS %ChaveNormPos,
+    Max(OppPos_MediaU3MTon)                                  AS MaxMediaPos
+RESIDENT TMP_OPP_POS
+GROUP BY ChaveDistMesAux;
+
+MAP_NORM_POS: MAPPING LOAD %ChaveNormPos, MaxMediaPos RESIDENT TMP_MAX_POS;
+DROP TABLE TMP_MAX_POS;
+
+OPP_POSITIVACAO:
+LOAD
+    %ChaveDistPdvMes,
+    OppPos_CNPJ,
+    OppPos_PDVFantasia,
+    OppPos_PDVCanal,
+    OppPos_PDVCidade,
+    OppPos_AnoMes,
+    OppPos_MesesAtivoU3M,
+    OppPos_MediaU3MTon,
+    OppPos_MediaU3MValor,
+    OppPos_UltimaCompra,
+    OppPos_DiasSemComprar,
+    OppPos_EraHero,
+    // Volume que o distribuidor deixa de faturar se nao recuperar este PDV
+    OppPos_MediaU3MTon                                       AS OppPos_VolumePotencialPerdidoTon,
+    OppPos_MediaU3MValor                                     AS OppPos_VolumePotencialPerdidoValor,
+    // Cada PDV recuperado vale 1 no KPI Positivacao. Quantos ainda faltam para
+    // o proximo degrau e quanto R$ esse degrau paga:
+    OppPos_GapDegrauPdvs,
+    OppPos_ValorDegrauTotal,
+    Round(If(OppPos_GapDegrauPdvs > 0,
+             OppPos_ValorDegrauTotal / OppPos_GapDegrauPdvs, 0), 0.01) AS OppPos_ValorPorPdvRecuperado,
+    Round(OppPos_Score, 0.1)                                 AS OppPos_Score,
+    If(OppPos_Score >= 75, 'Critico',
+    If(OppPos_Score >= 55, 'Alto',
+    If(OppPos_Score >= 35, 'Medio', 'Baixo')))               AS OppPos_Faixa
+;
+LOAD
+    *,
+    // Score 0-100. Pesos em "01 - Variaveis" - mexer la, nunca aqui.
+    $(vScorePosPesoVolume)     * sVolume
+  + $(vScorePosPesoRecencia)   * sRecencia
+  + $(vScorePosPesoFrequencia) * sFrequencia
+  + $(vScorePosPesoHero)       * sHero                       AS OppPos_Score
+;
+LOAD
+    %ChaveDistPdvMes,
+    OppCNPJ                                                  AS OppPos_CNPJ,
+    ApplyMap('MAP_PDV_FANTASIA', OppCNPJ, 'PDV nao cadastrado') AS OppPos_PDVFantasia,
+    ApplyMap('MAP_PDV_CANAL',    OppCNPJ, 'ND')              AS OppPos_PDVCanal,
+    ApplyMap('MAP_PDV_CIDADE',   OppCNPJ, 'ND')              AS OppPos_PDVCidade,
+    OppAnoMes                                                AS OppPos_AnoMes,
+    OppMesesAtivoU3M                                         AS OppPos_MesesAtivoU3M,
+    OppPos_MediaU3MTon,
+    OppPos_MediaU3MValor,
+    OppPos_UltimaCompra,
+    OppPos_DiasSemComprar,
+    OppPos_EraHero,
+    Num(ApplyMap('MAP_PPT_GAPPOS',   ChaveDistMesAux, 0))    AS OppPos_GapDegrauPdvs,
+    Num(ApplyMap('MAP_PPT_GANHOPOS', ChaveDistMesAux, 0))    AS OppPos_ValorDegrauTotal,
+    // Componentes normalizados do score
+    RangeMin(1, If(ApplyMap('MAP_NORM_POS', ChaveDistMesAux, 0) > 0,
+                   OppPos_MediaU3MTon / ApplyMap('MAP_NORM_POS', ChaveDistMesAux, 1), 0)) AS sVolume,
+    RangeMax(0, 1 - RangeMin(1, OppPos_DiasSemComprar / 90)) AS sRecencia,
+    OppMesesAtivoU3M / $(vJanelaRecenciaMeses)               AS sFrequencia,
+    OppPos_EraHero                                           AS sHero
+RESIDENT TMP_OPP_POS;
+
+// -----------------------------------------------------------------------------
+// Linhas-esqueleto para os PDVs de oportunidade
+// Sem elas o %ChaveDistPdvMes da oportunidade nao existe no fato (o PDV nao
+// comprou!) e a tabela inteira ficaria orfa. Ver docs/02 §2.4.
+// -----------------------------------------------------------------------------
+CONCATENATE (FACT_SELL_OUT)
+LOAD
+    Num(MonthStart(Date#(OppPos_AnoMes, 'YYYY-MM')))         AS %ChaveData,
+    AutoNumberHash128(OppPos_CNPJ)                           AS %ChavePDV,
+    AutoNumberHash128(SubField(%ChaveDistPdvMes, '|', 1))    AS %ChaveDistribuidor,
+    SubField(%ChaveDistPdvMes, '|', 1) & '|' & OppPos_AnoMes AS %ChaveDistMes,
+    %ChaveDistPdvMes,
+    'NAOHERO'                                                AS %ChaveHero,
+    0 AS QtdCaixas, 0 AS VolumeKg, 0 AS VolumeTon, 0 AS ValorSellOut,
+    0                                                        AS FlagVenda,
+    Timestamp('$(vExecInicio)')                              AS DataIngestao
+RESIDENT OPP_POSITIVACAO;
+
+LET vLinhasOppPos = NoOfRows('OPP_POSITIVACAO');
+TRACE >> OPP_POSITIVACAO: $(vLinhasOppPos) oportunidades de recuperacao de PDV;
+
+/* =============================================================================
+   4. OPP_RECUPERACAO - quem comprou, mas encolheu
+   -----------------------------------------------------------------------------
+   Mesma base de calculo da positivacao. A diferenca e o lado do filtro: aqui o
+   PDV COMPROU no mes-alvo, so que abaixo da propria media dos 3 meses.
+   ============================================================================= */
+TMP_OPP_REC:
+LOAD
+    OppDist & '|' & OppCNPJ & '|' & OppAnoMes                 AS %ChaveDistPdvMes,
+    OppDist & '|' & OppAnoMes                                 AS ChaveDistMesRec,
+    OppCNPJ                                                   AS OppRec_CNPJ,
+    ApplyMap('MAP_PDV_FANTASIA', OppCNPJ, 'PDV nao cadastrado') AS OppRec_PDVFantasia,
+    ApplyMap('MAP_PDV_CANAL',    OppCNPJ, 'ND')               AS OppRec_PDVCanal,
+    ApplyMap('MAP_PDV_CIDADE',   OppCNPJ, 'ND')               AS OppRec_PDVCidade,
+    OppAnoMes                                                 AS OppRec_AnoMes,
+    Round(OppMediaU3MTon, 0.000001)                           AS OppRec_MediaU3MTon,
+    Round(VolumeMesTon, 0.000001)                             AS OppRec_VolumeMesTon,
+    Round(OppMediaU3MTon - VolumeMesTon, 0.000001)            AS OppRec_QuedaTon,
+    Round((OppMediaU3MTon - VolumeMesTon) / OppMediaU3MTon, 0.0001) AS OppRec_QuedaPerc,
+    OppMesesAtivoU3M                                          AS OppRec_MesesAtivoU3M,
+    OppEraHero                                                AS OppRec_EraHero
+;
+LOAD
+    *,
+    Num(ApplyMap('MAP_PRESENCA_VOL', OppDist & '|' & OppCNPJ & '|' & AlvoIdx, 0)) AS VolumeMesTon,
+    Date(MakeDate(Floor(AlvoIdx / 12), Mod(AlvoIdx, 12) + 1, 1), 'YYYY-MM')       AS OppAnoMes
+RESIDENT TMP_OPP_BASE
+// Comprou no mes-alvo E caiu mais que o limite configurado (vQuedaMinimaRecuperacao)
+WHERE Exists(%ChavePresenca, OppDist & '|' & OppCNPJ & '|' & AlvoIdx)
+  AND OppMediaU3MTon > 0
+  AND Num(ApplyMap('MAP_PRESENCA_VOL', OppDist & '|' & OppCNPJ & '|' & AlvoIdx, 0))
+      < OppMediaU3MTon * (1 - $(vQuedaMinimaRecuperacao));
+
+// Normalizador: a maior queda dentro da carteira do distribuidor naquele mes.
+// Score comparavel entre PDVs do mesmo distribuidor - nao contra a base toda.
+TMP_MAX_REC:
+LOAD
+    ChaveDistMesRec        AS %ChaveNormRec,
+    Max(OppRec_QuedaTon)   AS MaxQuedaDist
+RESIDENT TMP_OPP_REC
+GROUP BY ChaveDistMesRec;
+
+MAP_NORM_REC: MAPPING LOAD %ChaveNormRec, MaxQuedaDist RESIDENT TMP_MAX_REC;
+DROP TABLE TMP_MAX_REC;
+
+OPP_RECUPERACAO:
+LOAD
+    %ChaveDistPdvMes,
+    OppRec_CNPJ, OppRec_PDVFantasia, OppRec_PDVCanal, OppRec_PDVCidade,
+    OppRec_AnoMes, OppRec_MediaU3MTon, OppRec_VolumeMesTon,
+    OppRec_QuedaTon, OppRec_QuedaPerc, OppRec_MesesAtivoU3M, OppRec_EraHero,
+    OppRec_GapVolumeTon,
+    OppRec_ValorDegrauVolume,
+    // Se este PDV voltar a media, quanto do gap de volume do distribuidor ele
+    // resolve sozinho? E quanto R$ isso representa no degrau.
+    OppRec_CoberturaDoGap,
+    Round(OppRec_CoberturaDoGap * OppRec_ValorDegrauVolume, 0.01) AS OppRec_ValorPotencial,
+    Round(OppRec_Score, 0.1)                                      AS OppRec_Score,
+    If(OppRec_Score >= 75, 'Critico',
+    If(OppRec_Score >= 55, 'Alto',
+    If(OppRec_Score >= 35, 'Medio', 'Baixo')))                    AS OppRec_Faixa
+;
+LOAD
+    *,
+    // 60% tamanho absoluto da queda (o que move o ponteiro do KPI)
+    // 40% severidade relativa (o que indica cliente em fuga)
+    60 * RangeMin(1, If(MaxQuedaDist > 0, OppRec_QuedaTon / MaxQuedaDist, 0))
+  + 40 * RangeMin(1, OppRec_QuedaPerc)                            AS OppRec_Score
+;
+LOAD
+    *,
+    Num(ApplyMap('MAP_NORM_REC', ChaveDistMesRec, 0))             AS MaxQuedaDist,
+    Num(ApplyMap('MAP_PPT_GAPVOL',   ChaveDistMesRec, 0))         AS OppRec_GapVolumeTon,
+    Num(ApplyMap('MAP_PPT_GANHOVOL', ChaveDistMesRec, 0))         AS OppRec_ValorDegrauVolume,
+    Round(If(Num(ApplyMap('MAP_PPT_GAPVOL', ChaveDistMesRec, 0)) > 0,
+             RangeMin(1, OppRec_QuedaTon / Num(ApplyMap('MAP_PPT_GAPVOL', ChaveDistMesRec, 1))),
+             0), 0.0001)                                          AS OppRec_CoberturaDoGap
+RESIDENT TMP_OPP_REC;
+
+DROP TABLE TMP_OPP_REC;
+DROP TABLE TMP_OPP_BASE;
+DROP TABLE TMP_OPP_POS;
+DROP TABLE TMP_CHAVE_PRESENCA;
+DROP TABLE TMP_PRESENCA;
+
+LET vLinhasOppRec = NoOfRows('OPP_RECUPERACAO');
+TRACE >> OPP_RECUPERACAO: $(vLinhasOppRec) PDVs abaixo da media historica;
+
+/* =============================================================================
+   5. OPP_HERO - qual SKU vender para completar o mix
+   ============================================================================= */
+
+// -----------------------------------------------------------------------------
+// 5.1 Ranking de SKU por regiao x categoria x canal (penetracao em PDVs)
+//     Penetracao, nao volume: para completar mix o que importa e o SKU que o
+//     canal mais aceita, nao o que gera mais tonelada.
+// -----------------------------------------------------------------------------
+LET vIdxRank = $(vIdxAtual) - 5;   // ultimos 6 meses
+
+TMP_RANK_BASE:
+LOAD
+    RankRegiaoHero & '|' & RankCatNum & '|' & RankCanal      AS %RankGrupoCanal,
+    RankRegiaoHero & '|' & RankCatNum                        AS %RankGrupoRegiao,
+    RankCodProduto,
+    Count(DISTINCT %ChaveDistPdvMes)                         AS RankPDVs,
+    Sum(RankVolumeTon)                                       AS RankVolumeTon
+GROUP BY RankRegiaoHero, RankCatNum, RankCanal, RankCodProduto;
+LOAD
+    %ChaveDistPdvMes,
+    SubField(%ChaveHero, '|', 1)                             AS RankRegiaoHero,
+    Num(ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0))          AS RankCatNum,
+    ApplyMap('MAP_PDVKEY_CANAL', %ChavePDV, 'ND')            AS RankCanal,
+    ApplyMap('MAP_PRODKEY_COD', %ChaveProduto, '')           AS RankCodProduto,
+    VolumeTon                                                AS RankVolumeTon
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1
+  AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
+
+TMP_RANK_CANAL:
+LOAD
+    %RankGrupoCanal,
+    FirstSortedValue(RankCodProduto, -RankPDVs)              AS SKUTop,
+    Sum(RankVolumeTon) / RangeMax(1, Sum(RankPDVs))          AS TicketMedioTon
+RESIDENT TMP_RANK_BASE
+GROUP BY %RankGrupoCanal;
+
+TMP_RANK_REGIAO:
+LOAD
+    %RankGrupoRegiao,
+    FirstSortedValue(RankCodProduto, -RankPDVs)              AS SKUTopRegiao,
+    Sum(RankVolumeTon) / RangeMax(1, Sum(RankPDVs))          AS TicketMedioTonRegiao
+RESIDENT TMP_RANK_BASE
+GROUP BY %RankGrupoRegiao;
+
+MAP_SKU_TOP_CANAL:    MAPPING LOAD %RankGrupoCanal,  SKUTop               RESIDENT TMP_RANK_CANAL;
+MAP_TICKET_CANAL:     MAPPING LOAD %RankGrupoCanal,  TicketMedioTon       RESIDENT TMP_RANK_CANAL;
+MAP_SKU_TOP_REGIAO:   MAPPING LOAD %RankGrupoRegiao, SKUTopRegiao         RESIDENT TMP_RANK_REGIAO;
+MAP_TICKET_REGIAO:    MAPPING LOAD %RankGrupoRegiao, TicketMedioTonRegiao RESIDENT TMP_RANK_REGIAO;
+
+DROP TABLES TMP_RANK_BASE, TMP_RANK_CANAL, TMP_RANK_REGIAO;
+
+// -----------------------------------------------------------------------------
+// 5.2 Historico do PDV por categoria: "ele ja comprou isso antes"
+//     Vale mais recomendar um SKU que o PDV ja girou do que o campeao do canal.
+// -----------------------------------------------------------------------------
+TMP_HIST_BASE:
+LOAD
+    SubField(%ChaveDistPdvMes, '|', 1)                       AS HistDist,
+    SubField(%ChaveDistPdvMes, '|', 2)                       AS HistCNPJ,
+    Num(ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0))          AS HistCatNum,
+    ApplyMap('MAP_PRODKEY_COD', %ChaveProduto, '')           AS HistCodProduto,
+    %ChaveData                                               AS HistData
+RESIDENT FACT_SELL_OUT
+WHERE FlagVenda = 1
+  AND ApplyMap('MAP_HERO_CATNUM', %ChaveHero, 0) > 0;
+
+TMP_HIST_CAT:
+LOAD
+    HistDist & '|' & HistCNPJ & '|' & HistCatNum             AS %HistKey,
+    FirstSortedValue(HistCodProduto, -HistData)              AS HistSKU,
+    Max(HistData)                                            AS HistUltimaData
+RESIDENT TMP_HIST_BASE
+GROUP BY HistDist & '|' & HistCNPJ & '|' & HistCatNum;
+
+MAP_HIST_SKU: MAPPING LOAD %HistKey, HistSKU RESIDENT TMP_HIST_CAT;
+MAP_HIST_FLAG: MAPPING LOAD %HistKey, 1      RESIDENT TMP_HIST_CAT;
+DROP TABLES TMP_HIST_CAT, TMP_HIST_BASE;
+
+// -----------------------------------------------------------------------------
+// 5.3 Fan-out: uma linha por categoria faltante
+// -----------------------------------------------------------------------------
+TMP_HERO_GAP:
+NOCONCATENATE
+LOAD
+    %ChaveDistPdvMes,
+    HeroDistribuidorID,
+    HeroCNPJ,
+    HeroAnoMes,
+    HeroRegiaoHero,
+    HeroQtdCategorias,
+    HeroCategoriasFaltantesQtd,
+    HeroVolumeTotalTon,
+    HeroCat1, HeroCat2, HeroCat3
+RESIDENT AGG_HERO_PDV_MES
+// PDV com pelo menos 1 categoria e no maximo 2 faltando: e onde a visita
+// converte. Quem nao comprou nada e problema de positivacao, nao de mix.
+WHERE HeroQtdCategorias >= 1 AND HeroQtdCategorias <= 2;
+
+JOIN (TMP_HERO_GAP)
+LOAD RecNo() AS OppHero_CatNum AUTOGENERATE 3;
+
+OPP_HERO:
+LOAD
+    %ChaveDistPdvMes,
+    OppHero_CNPJ,
+    OppHero_PDVFantasia,
+    OppHero_PDVCanal,
+    OppHero_AnoMes,
+    OppHero_CatNum,
+    OppHero_CategoriaFaltante,
+    OppHero_CategoriasFaltantesQtd,
+    OppHero_ConverteSozinho,
+    OppHero_SKURecomendado,
+    ApplyMap('MAP_PRODUTO_DESC', OppHero_SKURecomendado, OppHero_SKURecomendado) AS OppHero_SKURecomendadoDesc,
+    OppHero_MotivoRecomendacao,
+    Round(OppHero_VolumeEstimadoTon, 0.000001)               AS OppHero_VolumeEstimadoTon,
+    OppHero_GapDegrauPdvs,
+    OppHero_ValorDegrauTotal,
+    // Rateio honesto: o degrau paga X e faltam N PDVs Hero. Converter este PDV
+    // vale X/N - e so vale de verdade se os outros N-1 tambem forem convertidos.
+    Round(If(OppHero_ConverteSozinho = 1 AND OppHero_GapDegrauPdvs > 0,
+             OppHero_ValorDegrauTotal / OppHero_GapDegrauPdvs, 0), 0.01) AS OppHero_ValorPorConversao,
+    Round(OppHero_Score, 0.1)                                AS OppHero_Score,
+    If(OppHero_Score >= 75, 'Critico',
+    If(OppHero_Score >= 55, 'Alto',
+    If(OppHero_Score >= 35, 'Medio', 'Baixo')))              AS OppHero_Faixa
+;
+LOAD
+    *,
+    $(vScoreHeroPesoEsforco)   * If(OppHero_ConverteSozinho = 1, 1, 0.4)
+  + $(vScoreHeroPesoVolume)    * RangeMin(1, OppHero_VolumePdvTon / $(vHeroVolumeNormTon))
+  + $(vScoreHeroPesoAfinidade) * OppHero_TemHistorico                    AS OppHero_Score
+;
+LOAD
+    %ChaveDistPdvMes,
+    HeroCNPJ                                                 AS OppHero_CNPJ,
+    ApplyMap('MAP_PDV_FANTASIA', HeroCNPJ, 'PDV nao cadastrado') AS OppHero_PDVFantasia,
+    CanalPdv                                                 AS OppHero_PDVCanal,
+    HeroAnoMes                                               AS OppHero_AnoMes,
+    OppHero_CatNum,
+    ApplyMap('MAP_HERO_CATLABEL', HeroRegiaoHero & '|' & OppHero_CatNum,
+             'Cat ' & OppHero_CatNum)                        AS OppHero_CategoriaFaltante,
+    HeroCategoriasFaltantesQtd                               AS OppHero_CategoriasFaltantesQtd,
+    If(HeroCategoriasFaltantesQtd = 1, 1, 0)                 AS OppHero_ConverteSozinho,
+    HeroVolumeTotalTon                                       AS OppHero_VolumePdvTon,
+    TemHistorico                                             AS OppHero_TemHistorico,
+    // Prioridade da recomendacao: SKU que o PDV ja comprou > campeao do canal
+    // > campeao da regiao. Nunca devolve vazio.
+    If(TemHistorico = 1, SKUHistorico,
+       If(Len(SKUCanal) > 0, SKUCanal, SKURegiao))           AS OppHero_SKURecomendado,
+    If(TemHistorico = 1, 'Ja comprou este SKU antes',
+       If(Len(SKUCanal) > 0, 'Mais vendido no canal ' & CanalPdv,
+          'Mais vendido na regiao'))                         AS OppHero_MotivoRecomendacao,
+    If(Num(TicketCanal) > 0, TicketCanal, TicketRegiao)      AS OppHero_VolumeEstimadoTon,
+    Num(ApplyMap('MAP_PPT_GAPHERO',   HeroDistribuidorID & '|' & HeroAnoMes, 0)) AS OppHero_GapDegrauPdvs,
+    Num(ApplyMap('MAP_PPT_GANHOHERO', HeroDistribuidorID & '|' & HeroAnoMes, 0)) AS OppHero_ValorDegrauTotal
+;
+LOAD
+    *,
+    ApplyMap('MAP_PDV_CANAL', HeroCNPJ, 'ND')                                     AS CanalPdv,
+    ApplyMap('MAP_HIST_FLAG', HeroDistribuidorID & '|' & HeroCNPJ & '|' & OppHero_CatNum, 0) AS TemHistorico,
+    ApplyMap('MAP_HIST_SKU',  HeroDistribuidorID & '|' & HeroCNPJ & '|' & OppHero_CatNum, '') AS SKUHistorico,
+    ApplyMap('MAP_SKU_TOP_CANAL',
+             HeroRegiaoHero & '|' & OppHero_CatNum & '|' & ApplyMap('MAP_PDV_CANAL', HeroCNPJ, 'ND'), '') AS SKUCanal,
+    ApplyMap('MAP_SKU_TOP_REGIAO', HeroRegiaoHero & '|' & OppHero_CatNum, '')     AS SKURegiao,
+    ApplyMap('MAP_TICKET_CANAL',
+             HeroRegiaoHero & '|' & OppHero_CatNum & '|' & ApplyMap('MAP_PDV_CANAL', HeroCNPJ, 'ND'), 0)  AS TicketCanal,
+    ApplyMap('MAP_TICKET_REGIAO', HeroRegiaoHero & '|' & OppHero_CatNum, 0)       AS TicketRegiao
+RESIDENT TMP_HERO_GAP
+// Mantem apenas as categorias que REALMENTE faltam neste PDV
+WHERE Pick(OppHero_CatNum, HeroCat1, HeroCat2, HeroCat3) = 0;
+
+DROP TABLE TMP_HERO_GAP;
+
+LET vLinhasOppHero = NoOfRows('OPP_HERO');
+TRACE >> OPP_HERO: $(vLinhasOppHero) recomendacoes de SKU para completar mix;

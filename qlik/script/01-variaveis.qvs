@@ -1,0 +1,109 @@
+///$tab 01 - Variaveis
+/* =============================================================================
+   VARIAVEIS DE NEGOCIO E DE CARGA
+   ============================================================================= */
+
+// ----------------------------------------------------------------------------
+// 1. Modo de execucao
+// ----------------------------------------------------------------------------
+// 1 = gera base sintetica reproduzivel (DEV / UAT / demo)
+// 0 = le das conexoes reais definidas em "02 - Fontes"
+SET vUseMockData = 1;
+
+// Escreve QVDs da camada model ao final da carga (requer espaco de dados)
+SET vGravarQVD   = 0;
+SET vPastaQVD    = 'lib://PPT_Data/model/';
+
+// Section Access: 0 desliga (uso em DEV), 1 liga (obrigatorio em PRD)
+SET vAplicarSectionAccess = 0;
+
+// ----------------------------------------------------------------------------
+// 2. Janela temporal
+// ----------------------------------------------------------------------------
+LET vDataHoje      = Today();
+LET vMesesHistorico = 18;                                     // meses carregados
+LET vDataFim       = MonthEnd('$(vDataHoje)');
+LET vDataInicio    = MonthStart(AddMonths('$(vDataHoje)', -($(vMesesHistorico)-1)));
+
+// Versoes numericas - use SEMPRE estas em expressoes de script. Comparar datas
+// como texto depende do DateFormat da sessao e quebra silenciosamente.
+LET vDataInicioNum = Num(MonthStart(AddMonths(Today(), -($(vMesesHistorico)-1))));
+LET vDataFimNum    = Num(MonthEnd(Today()));
+LET vDataHojeNum   = Num(Today());
+LET vAnoMesAtual   = Num(Year('$(vDataHoje)') * 100 + Month('$(vDataHoje)'));
+LET vAnoMesAtualTxt = Date('$(vDataHoje)', 'YYYY-MM');
+
+TRACE >> Janela de carga: $(vDataInicio) ate $(vDataFim)  |  Mes corrente: $(vAnoMesAtualTxt);
+
+// ----------------------------------------------------------------------------
+// 3. Regras do programa PPT
+// ----------------------------------------------------------------------------
+// Pesos sobre o sell-in mensal (somam 2,00%)
+SET vPesoPositivacao = 0.0070;   // 0,70%
+SET vPesoVolume      = 0.0070;   // 0,70%
+SET vPesoMixHero     = 0.0060;   // 0,60%
+SET vPesoTotal       = 0.0200;   // 2,00%
+
+// Degraus de escalonamento
+SET vDegrau1 = 0.90;   // >= 90%  -> paga 50%
+SET vDegrau2 = 0.95;   // >= 95%  -> paga 70%
+SET vDegrau3 = 1.00;   // >= 100% -> paga 100%
+
+SET vFator1  = 0.50;
+SET vFator2  = 0.70;
+SET vFator3  = 1.00;
+
+// Funcao de escalonamento. Uso: $(vFatorPremio(AtingPositivacao))
+SET vFatorPremio = If($1 >= $(vDegrau3), $(vFator3),
+                   If($1 >= $(vDegrau2), $(vFator2),
+                   If($1 >= $(vDegrau1), $(vFator1), 0)));
+
+// Proximo degrau a perseguir. Uso: $(vProximoDegrau(AtingVolume))
+SET vProximoDegrau = If($1 >= $(vDegrau3), 0,
+                     If($1 >= $(vDegrau2), $(vDegrau3),
+                     If($1 >= $(vDegrau1), $(vDegrau2), $(vDegrau1))));
+
+// Fator do proximo degrau. Uso: $(vFatorProximoDegrau(AtingVolume))
+SET vFatorProximoDegrau = If($1 >= $(vDegrau3), $(vFator3),
+                          If($1 >= $(vDegrau2), $(vFator3),
+                          If($1 >= $(vDegrau1), $(vFator2), $(vFator1))));
+
+// ----------------------------------------------------------------------------
+// 4. Regras de oportunidade
+// ----------------------------------------------------------------------------
+SET vJanelaRecenciaMeses = 3;    // "comprou nos ultimos N meses"
+SET vQuedaMinimaRecuperacao = 0.20;  // queda >= 20% vs media U3M entra no ranking
+
+// Pesos do score de prioridade de POSITIVACAO (somam 100)
+SET vScorePosPesoVolume    = 40;   // volume medio perdido (normalizado)
+SET vScorePosPesoRecencia  = 25;   // quanto mais recente a ultima compra, maior
+SET vScorePosPesoFrequencia= 20;   // em quantos dos 3 meses comprou
+SET vScorePosPesoHero      = 15;   // PDV que era Hero vale mais
+
+// Pesos do score de prioridade HERO (somam 100)
+SET vScoreHeroPesoEsforco  = 45;   // falta 1 categoria vale mais que faltar 2
+SET vScoreHeroPesoVolume   = 35;   // porte do PDV
+SET vScoreHeroPesoAfinidade= 20;   // ja comprou a categoria em algum mes anterior
+
+// Volume mensal (ton) a partir do qual um PDV e considerado "grande" no score
+// Hero. Calibrar por canal na Fase 2.
+SET vHeroVolumeNormTon = 0.5;
+
+// ----------------------------------------------------------------------------
+// 5. Parametros do gerador mock
+// ----------------------------------------------------------------------------
+SET vMockRegioes        = 6;
+SET vMockExecutivos     = 12;
+SET vMockDistribuidores = 40;
+SET vMockPDVs           = 4000;
+SET vMockSlots          = 8;      // 3 slots Hero (C1,C2,C3) + 5 slots livres
+
+// ----------------------------------------------------------------------------
+// 6. Variaveis de expressao (replicadas em qlik/master-items/variables.json)
+// ----------------------------------------------------------------------------
+SET vSetRealizado  = '{<FlagVenda={1}>}';
+
+// Ritmo necessario para fechar o mes na meta
+SET vProjecaoLinear = 'RangeSum(Sum($(vSetRealizado) VolumeTon)) / Max(DiasUteisDecorridos) * Max(DiasUteisTotais)';
+
+TRACE >> Variaveis de negocio carregadas. Peso total = $(vPesoTotal);
