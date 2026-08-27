@@ -415,10 +415,18 @@ RegiaoID, RegiaoNome, RegiaoUF, RegiaoHero, RegiaoCoordenadorEmail
     // -------------------------------------------------------------------------
     // B2. Cidades (5 por regiao) - usadas no mapa da Tela 6
     // -------------------------------------------------------------------------
+    /* Num# com separadores EXPLICITOS. Valor decimal escrito com ponto dentro de
+       um INLINE e interpretado pelo DecimalSep da sessao: em pt-BR, '-23.5505'
+       nao e numero valido (o ponto e separador de milhar) e vira TEXTO. Na
+       primeira operacao aritmetica isso coage para zero, em silencio.
+       Num#(x, formato, '.', ',') diz ao Qlik como ler, independente do locale. */
     MOCK_CIDADE:
     LOAD
-        Text(RegiaoID) & '|' & Text(CidadeSeq) AS %MockCidadeKey,
-        Cidade, UF, Lat, Lon
+        Text(RegiaoID) & '|' & Text(CidadeSeq)      AS %MockCidadeKey,
+        Cidade,
+        UF,
+        Num#(Lat, '#0.0000', '.', ',')              AS Lat,
+        Num#(Lon, '#0.0000', '.', ',')              AS Lon
     INLINE [
 RegiaoID, CidadeSeq, Cidade, UF, Lat, Lon
 1, 1, Sao Paulo, SP, -23.5505, -46.6333
@@ -462,7 +470,21 @@ RegiaoID, CidadeSeq, Cidade, UF, Lat, Lon
     // B3. Produtos - o catalogo real que sustenta a regra Hero
     //     PoolHero: C1 / C2 / C3SP / C3DEM / OUTROS (usado apenas pelo gerador)
     // -------------------------------------------------------------------------
+    /* PrecoKg tem decimal com ponto - mesma armadilha do MOCK_CIDADE acima.
+       Sem o Num# todo ValorSellOut vira zero, e com ele a base de sell-in, a
+       premiacao e todos os valores em R$ do programa. */
     SRC_PRODUTO_TMP:
+    LOAD
+        CodProduto,
+        ProdutoDescricao,
+        ProdutoCategoria,
+        ProdutoSubcategoria,
+        ProdutoGramatura,
+        ProdutoUnidCaixa,
+        Num#(PrecoKg, '#0.00', '.', ',')            AS PrecoKg,
+        PoolHero,
+        PoolSeq
+    ;
     LOAD * INLINE [
 CodProduto, ProdutoDescricao, ProdutoCategoria, ProdutoSubcategoria, ProdutoGramatura, ProdutoUnidCaixa, PrecoKg, PoolHero, PoolSeq
 TZ-CR-200,  Creme de Ricota Tradicional 200g, Ricota,    Creme Ricota,        200,  24, 34.90, C1, 1

@@ -120,14 +120,64 @@ for (const nome of ABAS) {
     }
   });
 
-  // Regra 3: IF / END IF balanceados por arquivo.
+  /* Regra 3: INLINE com decimal em ponto e sem Num# explícito, POR COLUNA.
+     O INLINE é interpretado com o DecimalSep da sessão. Em pt-BR '34.90' não é
+     número (ponto é separador de milhar), vira TEXTO, e coage para zero na
+     primeira conta — sem erro. Foi assim que todo ValorSellOut zerou.
+
+     A checagem é por COLUNA, não por statement: basta uma coluna decimal ficar
+     sem Num# para o campo zerar, mesmo que as vizinhas estejam protegidas.
+
+     Posição absoluta, não texto de linha: `LOAD * INLINE [` aparece em vários
+     lugares do arquivo. Para achar o statement que abre o INLINE, sobe-se até o
+     rótulo da tabela, incluindo assim a carga precedente. */
+  const textoArquivo = codigo.get(nome);
+  const linhasArquivo = textoArquivo.split('\n');
+  const reInline = /INLINE\s*\[([\s\S]*?)\];/gi;
+  const ehDecimalPonto = (v) => /^-?\d+\.\d+$/.test(v.trim());
+  let achado;
+
+  while ((achado = reInline.exec(textoArquivo)) !== null) {
+    const linhasBloco = achado[1].split('\n').map((l) => l.trim()).filter(Boolean);
+    if (linhasBloco.length < 2) continue;
+
+    const colunas = linhasBloco[0].split(',').map((c) => c.trim());
+    const comDecimal = new Set();
+    for (const linhaDados of linhasBloco.slice(1)) {
+      linhaDados.split(',').forEach((valor, idx) => {
+        if (ehDecimalPonto(valor) && colunas[idx]) comDecimal.add(colunas[idx]);
+      });
+    }
+    if (comDecimal.size === 0) continue;
+
+    const linhaInline = textoArquivo.slice(0, achado.index).split('\n').length;
+    const contexto = [];
+    for (let k = linhaInline - 1; k >= 0 && linhaInline - k <= 60; k -= 1) {
+      const l = linhasArquivo[k] ?? '';
+      contexto.push(l);
+      if (/^\s*[A-Za-z_%][\w.]*:\s*$/.test(l)) break;   // rótulo da tabela
+    }
+    const statement = contexto.join('\n');
+
+    for (const coluna of comDecimal) {
+      const protegida = new RegExp(`Num#\\s*\\(\\s*${coluna}\\b`, 'i').test(statement);
+      if (!protegida) {
+        erro(nome, linhaInline,
+          `INLINE: coluna "${coluna}" tem decimal em ponto e nao passa por ` +
+          `Num#(${coluna}, formato, '.', ','). O DecimalSep da sessao le o valor ` +
+          'como texto e ele coage para zero em silencio.');
+      }
+    }
+  }
+
+  // Regra 4: IF / END IF balanceados por arquivo.
   const limpo = codigo.get(nome);
   const ifs = (limpo.match(/^\s*IF\b[^\n]*\bTHEN\b/gim) ?? []).length;
   const endifs = (limpo.match(/^\s*END\s+IF\s*;/gim) ?? []).length;
   if (ifs !== endifs) erro(nome, 0, `IF (${ifs}) e END IF (${endifs}) desbalanceados.`);
 }
 
-// Regra 4: expansão de variável nunca declarada.
+// Regra 5: expansão de variável nunca declarada.
 for (const [v, origem] of expandidasQualquer) {
   if (!declaradas.has(v)) avisos.push(`${origem}  $(${v}) expandida mas nunca declarada.`);
 }
